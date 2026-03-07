@@ -9,8 +9,14 @@ const meterColor = (value: number) => {
   return 'bg-rose-500'
 }
 
+const normalize01 = (value: number) => {
+  if (!Number.isFinite(value)) return 0
+  return Math.max(0, Math.min(1, value))
+}
+
 const StatMeter: React.FC<{ label: string; value: number }> = ({ label, value }) => {
-  const pct = Math.round(value * 100)
+  const normalized = normalize01(value)
+  const pct = Math.round(normalized * 100)
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between text-xs text-slate-600">
@@ -18,7 +24,7 @@ const StatMeter: React.FC<{ label: string; value: number }> = ({ label, value })
         <span>{pct}%</span>
       </div>
       <div className="h-2 w-full rounded bg-slate-200">
-        <div className={`h-2 rounded ${meterColor(value)}`} style={{ width: `${pct}%` }} />
+        <div className={`h-2 rounded ${meterColor(normalized)}`} style={{ width: `${pct}%` }} />
       </div>
     </div>
   )
