@@ -316,7 +316,7 @@ const fromBackend = (rawResponse: any, previous?: SimulationSnapshot): Simulatio
         name: obj?.name || obj?.id || 'object',
         type: obj?.kind || obj?.type || 'object',
         position: toVector3(obj?.position),
-        distance: toNumber(obj?.distance, undefined as unknown as number),
+        distance: toOptionalNumber(obj?.distance),
         status: 'visible',
       }))
     : worldEntities
