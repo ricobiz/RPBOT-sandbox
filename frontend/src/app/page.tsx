@@ -133,7 +133,7 @@ const HomePage: React.FC = () => {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 bg-slate-100 px-3 pb-24 pt-3 text-slate-900">
       <header className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-        <h1 className="text-base font-semibold">RPBOT Mobile Simulation Sandbox</h1>
+        <h1 className="text-base font-semibold">rpbot mobile simulation sandbox</h1>
         <p className="text-xs text-slate-600">Observe exactly what the agent sees, feels, remembers, and does.</p>
         <div className="mt-2 text-xs text-slate-500">
           {loading ? 'Loading simulation…' : `Tick ${snapshot?.tick ?? '-'} • t=${snapshot?.timeSeconds ?? '-'}s • ${snapshot?.paused ? 'Paused' : 'Running'}`}
