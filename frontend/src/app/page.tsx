@@ -58,7 +58,7 @@ const Viewport3D: React.FC = () => {
   if (!snapshot) {
     return (
       <div className="flex h-56 items-center justify-center rounded-xl border border-slate-300 bg-slate-100 text-sm text-slate-500">
-        No scene data
+        Waiting for simulation scene...
       </div>
     )
   }
@@ -169,9 +169,22 @@ const HomePage: React.FC = () => {
           <p className="text-xs text-slate-600">scene {snapshot?.world.sceneId || '-'}</p>
         </div>
         <div className="text-xs text-slate-600">
-          {loading ? 'loading' : `tick ${snapshot?.tick ?? '-'} • t=${snapshot?.timeSeconds ?? '-'}s • ${snapshot?.paused ? 'paused' : 'running'}`}
+          {loading
+            ? 'loading simulation...'
+            : `tick ${snapshot?.tick ?? '-'} • t=${snapshot?.timeSeconds ?? '-'}s • ${snapshot?.paused ? 'paused' : 'running'}`}
         </div>
-        {error ? <p className="mt-1 text-xs text-amber-700">{error}</p> : null}
+        {error ? (
+          <div className="mt-2 flex items-center justify-between gap-2 rounded border border-amber-200 bg-amber-50 p-2">
+            <p className="text-xs text-amber-800">{error}</p>
+            <button
+              type="button"
+              onClick={loadInitialState}
+              className="rounded bg-amber-600 px-2 py-1 text-xs font-semibold text-white"
+            >
+              Retry
+            </button>
+          </div>
+        ) : null}
       </section>
 
       <Viewport3D />
@@ -182,9 +195,15 @@ const HomePage: React.FC = () => {
           <p className="text-xs text-slate-500">action {snapshot?.agent.currentAction || '-'}</p>
         </div>
         <div className="space-y-1 text-sm">
-          <p><span className="font-semibold">goal</span> {snapshot?.goal.text || '-'}</p>
-          <p><span className="font-semibold">priority</span> {snapshot?.goal.priority || '-'}</p>
-          <p><span className="font-semibold">plan</span> {snapshot?.plan.currentAction || '-'}</p>
+          <p>
+            <span className="font-semibold">goal</span> {snapshot?.goal.text || '-'}
+          </p>
+          <p>
+            <span className="font-semibold">priority</span> {snapshot?.goal.priority || '-'}
+          </p>
+          <p>
+            <span className="font-semibold">plan</span> {snapshot?.plan.currentAction || '-'}
+          </p>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
           <div className="rounded border border-slate-200 bg-slate-50 p-2">energy {pct(snapshot?.physicalCondition.energy || 0)}</div>
@@ -218,7 +237,9 @@ const HomePage: React.FC = () => {
               </p>
             </button>
           ))}
-          {snapshot?.perceivedNearby.length === 0 ? <p className="text-sm text-slate-500">no perceived entities</p> : null}
+          {!loading && snapshot?.perceivedNearby.length === 0 ? (
+            <p className="text-sm text-slate-500">no perceived entities</p>
+          ) : null}
         </div>
         {selectedEntity ? (
           <div className="mt-2 rounded border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
@@ -244,62 +265,66 @@ const HomePage: React.FC = () => {
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-        <div className="mb-2 flex items-center justify-between">
-          <p className="text-xs uppercase tracking-wide text-slate-500">Chat</p>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => advanceTicks(1)}
-              disabled={isAdvancing || !snapshot || snapshot.paused}
-              className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-40"
-            >
-              +1
-            </button>
-            <button
-              type="button"
-              onClick={() => advanceTicks(5)}
-              disabled={isAdvancing || !snapshot || snapshot.paused}
-              className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-40"
-            >
-              +5
-            </button>
-            <button
-              type="button"
-              onClick={togglePause}
-              disabled={!snapshot}
-              className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-40"
-            >
-              {snapshot?.paused ? 'resume' : 'pause'}
-            </button>
-          </div>
-        </div>
-
-        <div className="mb-2 max-h-56 space-y-2 overflow-y-auto pr-1">
+        <p className="mb-2 text-xs uppercase tracking-wide text-slate-500">Chat</p>
+        <div className="mb-3 max-h-44 space-y-2 overflow-y-auto pr-1">
           {(snapshot?.chatMessages || []).map((message) => (
-            <div key={message.id} className="rounded border border-slate-200 bg-slate-50 p-2 text-sm">
-              <p className="text-xs uppercase tracking-wide text-slate-500">{message.role} • tick {message.tick}</p>
+            <div key={message.id} className={`rounded-lg p-2 text-sm ${message.role === 'user' ? 'bg-blue-50' : message.role === 'agent' ? 'bg-emerald-50' : 'bg-slate-100'}`}>
+              <div className="mb-1 flex items-center justify-between text-xs text-slate-500">
+                <span>{message.role}</span>
+                <span>tick {message.tick}</span>
+              </div>
               <p>{message.content}</p>
-              {message.grounding ? <p className="text-xs text-slate-600">{message.grounding}</p> : null}
             </div>
           ))}
           {snapshot?.chatMessages.length === 0 ? <p className="text-sm text-slate-500">no chat messages</p> : null}
         </div>
-
         <div className="flex items-center gap-2">
           <input
             type="text"
             value={chatInput}
             onChange={(event) => setChatInput(event.target.value)}
-            placeholder="message"
-            className="h-10 flex-1 rounded border border-slate-300 px-3 text-sm"
+            placeholder="Send grounded message"
+            className="h-10 flex-1 rounded-lg border border-slate-300 px-3 text-sm outline-none focus:border-slate-500"
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') onSend()
+            }}
           />
           <button
             type="button"
             onClick={onSend}
-            disabled={isSendingChat || !chatInput.trim()}
-            className="h-10 rounded bg-blue-600 px-3 text-sm font-semibold text-white disabled:opacity-40"
+            disabled={!snapshot || isSendingChat || !chatInput.trim()}
+            className="h-10 rounded-lg bg-blue-600 px-3 text-sm font-semibold text-white disabled:opacity-40"
           >
-            send
+            Send
+          </button>
+        </div>
+      </section>
+
+      <section className="sticky bottom-0 z-20 rounded-xl border border-slate-200 bg-white/95 p-3 shadow-sm backdrop-blur">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => advanceTicks(1)}
+            disabled={!snapshot || snapshot.paused || isAdvancing || loading}
+            className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
+          >
+            +1 Tick
+          </button>
+          <button
+            type="button"
+            onClick={() => advanceTicks(5)}
+            disabled={!snapshot || snapshot.paused || isAdvancing || loading}
+            className="rounded-lg bg-slate-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
+          >
+            +5 Ticks
+          </button>
+          <button
+            type="button"
+            onClick={togglePause}
+            disabled={!snapshot}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-800 disabled:opacity-40"
+          >
+            {snapshot?.paused ? 'Resume' : 'Pause'}
           </button>
         </div>
       </section>
