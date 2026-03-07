@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000'
+const DEFAULT_LOCAL_BACKEND_URL = 'http://127.0.0.1:8000'
 
 export type Vector3 = [number, number, number]
 
@@ -108,10 +108,52 @@ type SimulationStore = {
 }
 
 const nowIso = () => new Date().toISOString()
-
+const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
 
-const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+const toNumber = (value: unknown, fallback = 0) => (typeof value === 'number' && Number.isFinite(value) ? value : fallback)
+
+const toVector3 = (value: unknown, fallback: Vector3 = [0, 0, 0]): Vector3 => {
+  if (!Array.isArray(value)) return fallback
+  const x = toNumber(value[0], fallback[0])
+  const z = toNumber(value[1] ?? value[2], fallback[2])
+  return [x, 0, z]
+}
+
+const toIsoString = (value: unknown) => {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number') {
+    const ms = value > 1_000_000_000_000 ? value : value * 1000
+    const date = new Date(ms)
+    return Number.isNaN(date.getTime()) ? nowIso() : date.toISOString()
+  }
+  return nowIso()
+}
+
+const normalizeBackendBaseUrl = (value: string) => value.trim().replace(/\/+$/, '')
+
+const getBackendBaseUrl = () => {
+  const envUrl = process.env.NEXT_PUBLIC_BACKEND_URL
+  if (envUrl && envUrl.trim()) {
+    return normalizeBackendBaseUrl(envUrl)
+  }
+
+  if (typeof window === 'undefined') {
+    return DEFAULT_LOCAL_BACKEND_URL
+  }
+
+  const { protocol, hostname } = window.location
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    return `${protocol}//${hostname}:8000`
+  }
+
+  return ''
+}
+
+const apiUrl = (path: string) => {
+  const base = getBackendBaseUrl()
+  return base ? `${base}${path}` : path
+}
 
 const createFallbackSnapshot = (): SimulationSnapshot => ({
   tick: 0,
@@ -120,41 +162,37 @@ const createFallbackSnapshot = (): SimulationSnapshot => ({
   world: {
     sceneId: 'default',
     entities: [
-      { id: 'table-1', name: 'Workbench', type: 'furniture', position: [2, 0, -1] },
-      { id: 'crate-1', name: 'Supply Crate', type: 'object', position: [-2, 0, 1] },
+      { id: 'object-console', name: 'Console', type: 'terminal', position: [1.5, 0, -0.5] },
+      { id: 'object-crate', name: 'Supply Crate', type: 'crate', position: [-1.2, 0, 1.1] },
     ],
   },
   agent: {
-    id: 'robot',
+    id: 'agent-1',
     name: 'RPBOT Agent',
     position: [0, 0, 0],
     orientation: 0,
     currentAction: 'idle',
-    targetEntityId: 'table-1',
+    targetEntityId: 'object-console',
   },
   perceivedNearby: [
-    { id: 'table-1', name: 'Workbench', type: 'furniture', position: [2, 0, -1], distance: 2.2, status: 'reachable' },
-    { id: 'crate-1', name: 'Supply Crate', type: 'object', position: [-2, 0, 1], distance: 2.4, status: 'visible' },
+    { id: 'object-console', name: 'Console', type: 'terminal', position: [1.5, 0, -0.5], distance: 1.6, status: 'visible' },
+    { id: 'object-crate', name: 'Supply Crate', type: 'crate', position: [-1.2, 0, 1.1], distance: 1.7, status: 'visible' },
   ],
-  emotions: [
-    { name: 'focus', intensity: 0.82 },
-    { name: 'curiosity', intensity: 0.61 },
-    { name: 'frustration', intensity: 0.18 },
-  ],
+  emotions: [{ name: 'focus', intensity: 0.6 }],
   physicalCondition: {
-    energy: 0.75,
-    stamina: 0.79,
-    stress: 0.24,
-    health: 0.95,
+    energy: 0.8,
+    stamina: 0.78,
+    stress: 0.22,
+    health: 0.9,
   },
   goal: {
-    text: 'Inspect nearby objects and report useful findings to the operator.',
-    priority: 'high',
+    text: 'Observe the world and wait for user instructions.',
+    priority: 'medium',
   },
   plan: {
-    steps: ['Orient to target', 'Approach target', 'Inspect target', 'Summarize findings'],
+    steps: ['Observe nearby entities', 'Respond to user'],
     currentStepIndex: 0,
-    currentAction: 'Orienting toward Workbench',
+    currentAction: 'idle',
   },
   recentMemoryUpdates: [
     {
@@ -162,7 +200,7 @@ const createFallbackSnapshot = (): SimulationSnapshot => ({
       tick: 0,
       timestamp: nowIso(),
       type: 'reflection',
-      content: 'Boot complete. Starting baseline environment scan.',
+      content: 'Fallback mode active: backend unavailable.',
     },
   ],
   interactionHistory: [],
@@ -172,14 +210,275 @@ const createFallbackSnapshot = (): SimulationSnapshot => ({
       role: 'system',
       tick: 0,
       timestamp: nowIso(),
-      content: 'Simulation initialized.',
-      grounding: 'Tick 0 • Scene default',
+      content: 'Running with local fallback state until backend responds.',
+      grounding: 'tick 0',
     },
   ],
 })
 
+const mapActionKind = (kind: unknown): SimActionState => {
+  const text = typeof kind === 'string' ? kind.toLowerCase() : 'idle'
+  if (text === 'walk') return 'walk'
+  if (text === 'interact') return 'interact'
+  if (text === 'orient') return 'orient'
+  return 'idle'
+}
+
+const priorityFromUrgency = (urgency: unknown): GoalState['priority'] => {
+  const value = toNumber(urgency, 0)
+  if (value >= 0.66) return 'high'
+  if (value >= 0.33) return 'medium'
+  return 'low'
+}
+
+const mapMemoryType = (type: unknown): MemoryUpdate['type'] => {
+  const text = typeof type === 'string' ? type.toLowerCase() : ''
+  if (text.includes('decision') || text.includes('goal')) return 'decision'
+  if (text.includes('interact') || text.includes('chat')) return 'interaction'
+  if (text.includes('reflect') || text.includes('summary')) return 'reflection'
+  return 'observation'
+}
+
+const distance3 = (a: Vector3, b: Vector3) => {
+  const dx = a[0] - b[0]
+  const dz = a[2] - b[2]
+  return Math.sqrt(dx * dx + dz * dz)
+}
+
+const dedupeChat = (messages: GroundedChatMessage[]) => {
+  const seen = new Set<string>()
+  return messages.filter((message) => {
+    const key = `${message.role}-${message.tick}-${message.content}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+const appendPath = (path: Vector3[], next: Vector3) => {
+  const last = path[path.length - 1]
+  if (last && last[0] === next[0] && last[1] === next[1] && last[2] === next[2]) return path
+  const nextPath = [...path, next]
+  return nextPath.slice(-120)
+}
+
+const unwrapState = (raw: any) => raw?.state || raw?.data?.state || raw?.data || raw || {}
+
+const fromBackend = (rawResponse: any, previous?: SimulationSnapshot): SimulationSnapshot => {
+  const base = previous || createFallbackSnapshot()
+  const raw = unwrapState(rawResponse)
+
+  const rawObjects = raw?.objects && typeof raw.objects === 'object' ? raw.objects : {}
+  const objectEntities: WorldEntity[] = Object.entries(rawObjects).map(([id, obj]: [string, any]) => ({
+    id,
+    name: obj?.name || id,
+    type: obj?.kind || 'object',
+    position: toVector3(obj?.position),
+    status: obj?.interactable ? 'interactable' : 'observed',
+  }))
+
+  const rawAgents = raw?.agents && typeof raw.agents === 'object' ? raw.agents : {}
+  const agentIds = Object.keys(rawAgents)
+  const selectedAgentId = base.agent.id && rawAgents[base.agent.id] ? base.agent.id : agentIds[0] || base.agent.id
+  const rawAgent = rawAgents[selectedAgentId] || {}
+
+  const agentPosition = toVector3(rawAgent?.position, base.agent.position)
+  const worldEntities: WorldEntity[] = [
+    ...objectEntities,
+    ...agentIds
+      .filter((id) => id !== selectedAgentId)
+      .map((id) => {
+        const other = rawAgents[id]
+        return {
+          id,
+          name: other?.name || id,
+          type: 'agent',
+          position: toVector3(other?.position),
+          status: 'visible',
+        }
+      }),
+  ]
+
+  const rawPerception = raw?.perception || raw?.perceptions?.[selectedAgentId]
+  const perceivedNearby: WorldEntity[] = Array.isArray(rawPerception?.nearby_visible_objects)
+    ? rawPerception.nearby_visible_objects.map((obj: any) => ({
+        id: obj?.id || makeId(),
+        name: obj?.name || obj?.id || 'object',
+        type: obj?.kind || obj?.type || 'object',
+        position: toVector3(obj?.position),
+        distance: toNumber(obj?.distance, undefined as unknown as number),
+        status: 'visible',
+      }))
+    : worldEntities
+        .map((entity) => ({ ...entity, distance: distance3(agentPosition, entity.position), status: 'in-world' }))
+        .sort((a, b) => (a.distance || 0) - (b.distance || 0))
+        .slice(0, 8)
+
+  const emotionDimensions = rawAgent?.emotional_state && typeof rawAgent.emotional_state === 'object'
+    ? rawAgent.emotional_state
+    : null
+
+  const emotions: EmotionState[] = emotionDimensions
+    ? Object.entries(emotionDimensions).map(([name, value]: [string, any]) => ({
+        name,
+        intensity: clamp(toNumber(value?.intensity, 0), 0, 1),
+      }))
+    : base.emotions
+
+  const physical = rawAgent?.physical_state || {}
+  const stress = clamp(toNumber(physical?.stress_load, base.physicalCondition.stress), 0, 1)
+  const hunger = clamp(toNumber(physical?.hunger, 0.2), 0, 1)
+
+  const physicalCondition: PhysicalCondition = {
+    energy: clamp(toNumber(physical?.energy, base.physicalCondition.energy), 0, 1),
+    stamina: clamp(toNumber(physical?.stamina, base.physicalCondition.stamina), 0, 1),
+    stress,
+    health: clamp(1 - hunger * 0.4 - stress * 0.3, 0, 1),
+  }
+
+  const currentGoal = rawAgent?.current_goal || {}
+  const goal: GoalState = {
+    text: currentGoal?.name || currentGoal?.reason || base.goal.text,
+    priority: priorityFromUrgency(currentGoal?.urgency),
+  }
+
+  const rawPlanSteps = Array.isArray(rawAgent?.current_plan) ? rawAgent.current_plan : base.plan.steps
+  const currentAction = rawAgent?.current_action || {}
+
+  const plan: PlanState = {
+    steps: rawPlanSteps,
+    currentStepIndex: clamp(toNumber(currentAction?.elapsed, base.plan.currentStepIndex), 0, Math.max(rawPlanSteps.length - 1, 0)),
+    currentAction:
+      (typeof currentAction?.kind === 'string' && currentAction.kind) ||
+      (typeof currentAction?.status === 'string' && currentAction.status) ||
+      base.plan.currentAction,
+  }
+
+  const memoryRaw = Array.isArray(rawAgent?.memory) ? rawAgent.memory : []
+  const recentMemoryUpdates: MemoryUpdate[] = memoryRaw.slice(-30).map((item: any, index: number) => ({
+    id: `${selectedAgentId}-memory-${item?.tick ?? base.tick}-${index}-${item?.category || 'observation'}`,
+    tick: toNumber(item?.tick, base.tick),
+    timestamp: toIsoString(item?.timestamp),
+    type: mapMemoryType(item?.category),
+    content: item?.content || 'Memory update',
+  }))
+
+  const events = Array.isArray(raw?.events) ? raw.events : []
+  const interactionHistory: InteractionEvent[] = events.slice(-30).map((event: any, index: number) => ({
+    id: event?.id || `${selectedAgentId}-event-${event?.tick ?? base.tick}-${index}`,
+    tick: toNumber(event?.tick, base.tick),
+    timestamp: toIsoString(event?.timestamp),
+    with: event?.source_agent_id || event?.target_id || 'world',
+    summary: event?.content || event?.event_type || 'event',
+  }))
+
+  const nextSnapshot: SimulationSnapshot = {
+    tick: toNumber(raw?.tick ?? rawResponse?.tick, base.tick),
+    timeSeconds: toNumber(raw?.time ?? rawResponse?.time, base.timeSeconds),
+    paused: base.paused,
+    world: {
+      sceneId: raw?.scene_id || 'default',
+      entities: worldEntities.length ? worldEntities : base.world.entities,
+    },
+    agent: {
+      id: selectedAgentId,
+      name: rawAgent?.name || base.agent.name,
+      position: agentPosition,
+      orientation: toNumber(rawAgent?.facing_radians, base.agent.orientation),
+      currentAction: mapActionKind(currentAction?.kind),
+      targetEntityId: currentAction?.target_id || base.agent.targetEntityId,
+    },
+    perceivedNearby: perceivedNearby.length ? perceivedNearby : base.perceivedNearby,
+    emotions: emotions.length ? emotions : base.emotions,
+    physicalCondition,
+    goal,
+    plan,
+    recentMemoryUpdates: recentMemoryUpdates.length ? recentMemoryUpdates : base.recentMemoryUpdates,
+    interactionHistory: interactionHistory.length ? interactionHistory : base.interactionHistory,
+    chatMessages: base.chatMessages,
+  }
+
+  const backendReply = typeof rawAgent?.last_response === 'string' ? rawAgent.last_response.trim() : ''
+  if (backendReply) {
+    nextSnapshot.chatMessages = dedupeChat([
+      ...base.chatMessages,
+      {
+        id: makeId(),
+        role: 'agent',
+        tick: nextSnapshot.tick,
+        timestamp: nowIso(),
+        content: backendReply,
+        grounding: `tick ${nextSnapshot.tick} • ${nextSnapshot.world.sceneId}`,
+      },
+    ])
+  }
+
+  return nextSnapshot
+}
+
+const fallbackTickAdvance = (snapshot: SimulationSnapshot, steps: number): SimulationSnapshot => {
+  let next = { ...snapshot }
+
+  for (let i = 0; i < steps; i += 1) {
+    const tick = next.tick + 1
+    const target = next.perceivedNearby[tick % Math.max(next.perceivedNearby.length, 1)]
+    const nextAction: SimActionState[] = ['orient', 'walk', 'interact', 'idle']
+    const action = nextAction[tick % nextAction.length]
+
+    const movedPosition: Vector3 = [...next.agent.position]
+    if (action === 'walk' && target) {
+      movedPosition[0] += (target.position[0] - movedPosition[0]) * 0.2
+      movedPosition[2] += (target.position[2] - movedPosition[2]) * 0.2
+    }
+
+    next = {
+      ...next,
+      tick,
+      timeSeconds: next.timeSeconds + 1,
+      agent: {
+        ...next.agent,
+        position: movedPosition,
+        currentAction: action,
+        targetEntityId: target?.id,
+      },
+      plan: {
+        ...next.plan,
+        currentStepIndex: tick % Math.max(next.plan.steps.length, 1),
+        currentAction: action,
+      },
+      emotions: next.emotions.map((emotion) => ({
+        ...emotion,
+        intensity: clamp(emotion.intensity + (Math.random() - 0.5) * 0.05, 0, 1),
+      })),
+      physicalCondition: {
+        ...next.physicalCondition,
+        energy: clamp(next.physicalCondition.energy - 0.02, 0, 1),
+        stamina: clamp(next.physicalCondition.stamina - 0.01, 0, 1),
+        stress: clamp(next.physicalCondition.stress + (action === 'interact' ? 0.02 : -0.01), 0, 1),
+      },
+      recentMemoryUpdates: [
+        ...next.recentMemoryUpdates.slice(-24),
+        {
+          id: makeId(),
+          tick,
+          timestamp: nowIso(),
+          type: 'observation',
+          content: `Fallback tick ${tick}: action ${action}${target ? ` near ${target.name}` : ''}`,
+        },
+      ],
+    }
+  }
+
+  return next
+}
+
+const fallbackAgentReply = (snapshot: SimulationSnapshot, text: string) => {
+  const nearby = snapshot.perceivedNearby[0]
+  return `Received: "${text}". Tick ${snapshot.tick}, action ${snapshot.agent.currentAction}, nearest ${nearby?.name || 'none'}.`
+}
+
 const requestJson = async (path: string, init?: RequestInit): Promise<any> => {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(apiUrl(path), {
     ...init,
     headers: {
       'Content-Type': 'application/json',
@@ -188,173 +487,10 @@ const requestJson = async (path: string, init?: RequestInit): Promise<any> => {
   })
 
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`)
+    throw new Error(`Backend request failed (${response.status} ${response.statusText})`)
   }
 
   return response.json()
-}
-
-const fromBackend = (raw: any, previous?: SimulationSnapshot): SimulationSnapshot => {
-  const base = previous || createFallbackSnapshot()
-
-  const rawScene = raw?.world?.sceneId || raw?.sceneId || 'default'
-  const rawTick = typeof raw?.tick === 'number' ? raw.tick : base.tick
-  const rawTime = typeof raw?.timeSeconds === 'number'
-    ? raw.timeSeconds
-    : typeof raw?.time === 'number'
-      ? raw.time
-      : base.timeSeconds
-
-  const sceneObjects = raw?.scenes?.default?.objects
-  const worldEntities: WorldEntity[] = raw?.world?.entities
-    ? raw.world.entities
-    : sceneObjects
-      ? Object.entries(sceneObjects).map(([id, value]: [string, any]) => ({
-          id,
-          name: value.type === 'robot' ? 'RPBOT Agent' : id,
-          type: value.type || 'object',
-          position: (value.position || [0, 0, 0]) as Vector3,
-          velocity: (value.velocity || [0, 0, 0]) as Vector3,
-        }))
-      : base.world.entities
-
-  const robotFromScene = worldEntities.find((entity) => entity.id === 'robot')
-  const defaultAction = base.agent.currentAction
-
-  const agent: AgentSnapshot = {
-    id: raw?.agent?.id || robotFromScene?.id || base.agent.id,
-    name: raw?.agent?.name || base.agent.name,
-    position: (raw?.agent?.position || robotFromScene?.position || base.agent.position) as Vector3,
-    orientation: typeof raw?.agent?.orientation === 'number' ? raw.agent.orientation : base.agent.orientation,
-    currentAction: (raw?.plan?.actionState || raw?.agent?.currentAction || defaultAction) as SimActionState,
-    targetEntityId: raw?.agent?.targetEntityId || base.agent.targetEntityId,
-  }
-
-  const nearby: WorldEntity[] = raw?.perceivedNearby
-    || raw?.perception?.nearby_objects?.map((obj: any) => ({
-      id: obj.id,
-      name: obj.name || obj.id,
-      type: obj.type || 'object',
-      position: (obj.position || [0, 0, 0]) as Vector3,
-      distance: typeof obj.distance === 'number' ? obj.distance : undefined,
-      status: obj.status,
-    }))
-    || base.perceivedNearby
-
-  const emotions: EmotionState[] = raw?.emotions || base.emotions
-  const physicalCondition: PhysicalCondition = raw?.physicalCondition || base.physicalCondition
-  const goal: GoalState = raw?.goal || base.goal
-
-  const plan: PlanState = raw?.plan
-    ? {
-        steps: raw.plan.steps || base.plan.steps,
-        currentStepIndex: typeof raw.plan.currentStepIndex === 'number' ? raw.plan.currentStepIndex : base.plan.currentStepIndex,
-        currentAction: raw.plan.currentAction || base.plan.currentAction,
-      }
-    : base.plan
-
-  const recentMemoryUpdates: MemoryUpdate[] = raw?.recentMemoryUpdates || raw?.memoryUpdates || base.recentMemoryUpdates
-  const interactionHistory: InteractionEvent[] = raw?.interactionHistory || base.interactionHistory
-  const chatMessages: GroundedChatMessage[] = raw?.chatMessages || base.chatMessages
-
-  return {
-    tick: rawTick,
-    timeSeconds: rawTime,
-    paused: typeof raw?.paused === 'boolean' ? raw.paused : base.paused,
-    world: {
-      sceneId: rawScene,
-      entities: worldEntities,
-    },
-    agent,
-    perceivedNearby: nearby,
-    emotions,
-    physicalCondition,
-    goal,
-    plan,
-    recentMemoryUpdates,
-    interactionHistory,
-    chatMessages,
-  }
-}
-
-const fallbackTickAdvance = (snapshot: SimulationSnapshot, steps: number): SimulationSnapshot => {
-  const next = { ...snapshot }
-
-  for (let i = 0; i < steps; i += 1) {
-    const tick = next.tick + 1
-    const actionCycle: SimActionState[] = ['orient', 'walk', 'interact', 'idle']
-    const nextAction = actionCycle[tick % actionCycle.length]
-    const target = next.perceivedNearby[tick % Math.max(next.perceivedNearby.length, 1)]
-
-    const movedPosition: Vector3 = [...next.agent.position] as Vector3
-    if (nextAction === 'walk' && target) {
-      const dx = target.position[0] - movedPosition[0]
-      const dz = target.position[2] - movedPosition[2]
-      movedPosition[0] = movedPosition[0] + dx * 0.22
-      movedPosition[2] = movedPosition[2] + dz * 0.22
-    }
-
-    next.tick = tick
-    next.timeSeconds = next.timeSeconds + 1
-    next.agent = {
-      ...next.agent,
-      position: movedPosition,
-      currentAction: nextAction,
-      targetEntityId: target?.id,
-      orientation: Math.atan2((target?.position[0] || 0) - movedPosition[0], (target?.position[2] || 1) - movedPosition[2]),
-    }
-
-    next.plan = {
-      ...next.plan,
-      currentStepIndex: tick % Math.max(next.plan.steps.length, 1),
-      currentAction:
-        nextAction === 'walk'
-          ? `Walking toward ${target?.name || 'target'}`
-          : nextAction === 'interact'
-            ? `Interacting with ${target?.name || 'target'}`
-            : nextAction === 'orient'
-              ? `Orienting toward ${target?.name || 'target'}`
-              : 'Waiting for next instruction',
-    }
-
-    next.emotions = next.emotions.map((emotion) => {
-      const jitter = (Math.random() - 0.5) * 0.08
-      return { ...emotion, intensity: clamp(emotion.intensity + jitter, 0, 1) }
-    })
-
-    next.physicalCondition = {
-      ...next.physicalCondition,
-      energy: clamp(next.physicalCondition.energy - 0.02, 0, 1),
-      stamina: clamp(next.physicalCondition.stamina - 0.015, 0, 1),
-      stress: clamp(next.physicalCondition.stress + (nextAction === 'interact' ? 0.03 : -0.01), 0, 1),
-    }
-
-    next.recentMemoryUpdates = [
-      {
-        id: makeId(),
-        tick,
-        timestamp: nowIso(),
-        type: nextAction === 'interact' ? 'interaction' : 'observation',
-        content: `Tick ${tick}: ${next.plan.currentAction}. Nearby count ${next.perceivedNearby.length}.`,
-      },
-      ...next.recentMemoryUpdates,
-    ].slice(0, 20)
-  }
-
-  return next
-}
-
-const groundedReply = (snapshot: SimulationSnapshot, message: string): GroundedChatMessage => {
-  const visible = snapshot.perceivedNearby.slice(0, 3).map((entity) => entity.name).join(', ') || 'no major objects'
-
-  return {
-    id: makeId(),
-    role: 'agent',
-    tick: snapshot.tick,
-    timestamp: nowIso(),
-    content: `Acknowledged: "${message}". I am ${snapshot.plan.currentAction.toLowerCase()} and currently see ${visible}.`,
-    grounding: `Tick ${snapshot.tick} • Goal: ${snapshot.goal.text}`,
-  }
 }
 
 export const useSimulationStore = create<SimulationStore>((set, get) => ({
@@ -370,138 +506,153 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
     set({ loading: true, error: null })
 
     try {
-      const raw = await requestJson('/simulation/state')
-      const snapshot = fromBackend(raw)
+      const response = await requestJson('/simulation/state')
+      const snapshot = fromBackend(response, get().snapshot || undefined)
       set({
         snapshot,
         loading: false,
+        error: null,
         agentPath: [snapshot.agent.position],
       })
-    } catch {
-      const fallback = createFallbackSnapshot()
+    } catch (error) {
+      const previous = get().snapshot
+      const snapshot = previous || createFallbackSnapshot()
+      const message = error instanceof Error ? error.message : 'Unable to load simulation state'
       set({
-        snapshot: fallback,
+        snapshot,
         loading: false,
-        agentPath: [fallback.agent.position],
-        error: 'Backend unavailable, using local simulation fallback.',
+        error: `Backend unavailable. ${message}`,
+        agentPath: previous ? get().agentPath : [snapshot.agent.position],
       })
     }
   },
 
   advanceTicks: async (steps = 1) => {
-    const current = get().snapshot
-    if (!current) return
+    const safeSteps = Math.max(1, Math.floor(steps))
+    const current = get().snapshot || createFallbackSnapshot()
 
-    set({ isAdvancing: true, error: null })
+    if (current.paused) return
+
+    set({ isAdvancing: true, error: null, snapshot: current })
 
     try {
-      const raw = await requestJson('/simulation/tick', {
+      const response = await requestJson('/simulation/tick', {
         method: 'POST',
-        body: JSON.stringify({ steps }),
+        body: JSON.stringify({ dt: 1, steps: safeSteps }),
       })
 
-      const snapshot = fromBackend(raw, current)
+      const snapshot = fromBackend(response, get().snapshot || current)
       set((state) => ({
         snapshot,
         isAdvancing: false,
-        agentPath: [...state.agentPath, snapshot.agent.position].slice(-64),
+        error: null,
+        agentPath: appendPath(state.agentPath, snapshot.agent.position),
       }))
-    } catch {
-      const snapshot = fallbackTickAdvance(current, steps)
+    } catch (error) {
+      const snapshot = fallbackTickAdvance(current, safeSteps)
+      const message = error instanceof Error ? error.message : 'Unable to tick simulation'
       set((state) => ({
         snapshot,
         isAdvancing: false,
-        error: 'Using local tick fallback. Connect backend to sync authoritative state.',
-        agentPath: [...state.agentPath, snapshot.agent.position].slice(-64),
+        error: `Tick used fallback mode. ${message}`,
+        agentPath: appendPath(state.agentPath, snapshot.agent.position),
       }))
     }
   },
 
   sendGroundedChat: async (message: string) => {
-    const trimmed = message.trim()
-    const snapshot = get().snapshot
-    if (!snapshot || !trimmed) return
+    const content = message.trim()
+    if (!content) return
 
+    const current = get().snapshot || createFallbackSnapshot()
     const userMessage: GroundedChatMessage = {
       id: makeId(),
       role: 'user',
-      tick: snapshot.tick,
+      tick: current.tick,
       timestamp: nowIso(),
-      content: trimmed,
-      grounding: `User instruction grounded to tick ${snapshot.tick}`,
+      content,
+      grounding: `tick ${current.tick} • ${current.world.sceneId}`,
     }
 
     set((state) => ({
-      isSendingChat: true,
       snapshot: state.snapshot
         ? { ...state.snapshot, chatMessages: [...state.snapshot.chatMessages, userMessage] }
-        : state.snapshot,
+        : { ...current, chatMessages: [...current.chatMessages, userMessage] },
+      isSendingChat: true,
+      error: null,
     }))
 
     try {
-      const raw = await requestJson('/simulation/chat', {
+      const response = await requestJson('/simulation/chat', {
         method: 'POST',
-        body: JSON.stringify({ message: trimmed, grounded: true }),
+        body: JSON.stringify({
+          message: content,
+          agent_id: current.agent.id,
+          auto_tick: true,
+        }),
       })
 
-      const backendSnapshot = fromBackend(raw, get().snapshot || snapshot)
-      set({ snapshot: backendSnapshot, isSendingChat: false })
-    } catch {
-      const latest = get().snapshot
-      if (!latest) {
-        set({ isSendingChat: false })
-        return
-      }
+      const base = get().snapshot || current
+      const snapshot = fromBackend(response, base)
+      const responseText = typeof response?.response === 'string' ? response.response : ''
+      const assistantMessage: GroundedChatMessage | null = responseText
+        ? {
+            id: makeId(),
+            role: 'agent',
+            tick: snapshot.tick,
+            timestamp: nowIso(),
+            content: responseText,
+            grounding: `tick ${snapshot.tick} • ${snapshot.world.sceneId}`,
+          }
+        : null
 
-      const reply = groundedReply(latest, trimmed)
-      const memory: MemoryUpdate = {
-        id: makeId(),
-        tick: latest.tick,
-        timestamp: nowIso(),
-        type: 'interaction',
-        content: `User asked: "${trimmed}". Agent produced grounded fallback reply.`,
-      }
-
-      set({
-        isSendingChat: false,
-        error: 'Chat endpoint unavailable. Added locally grounded response.',
-        snapshot: {
-          ...latest,
-          chatMessages: [...latest.chatMessages, reply],
-          recentMemoryUpdates: [memory, ...latest.recentMemoryUpdates].slice(0, 20),
-          interactionHistory: [
-            {
-              id: makeId(),
-              tick: latest.tick,
-              timestamp: nowIso(),
-              with: 'operator',
-              summary: `Grounded chat fallback for message: ${trimmed}`,
-            },
-            ...latest.interactionHistory,
-          ].slice(0, 20),
-        },
-      })
-    }
-  },
-
-  togglePause: async () => {
-    const snapshot = get().snapshot
-    if (!snapshot) return
-    const paused = !snapshot.paused
-
-    try {
-      await requestJson('/simulation/pause', {
-        method: 'POST',
-        body: JSON.stringify({ paused }),
-      })
-      set((state) => (state.snapshot ? { snapshot: { ...state.snapshot, paused } } : state))
-    } catch {
       set((state) => ({
-        error: 'Pause state updated locally only (backend pause endpoint unavailable).',
-        snapshot: state.snapshot ? { ...state.snapshot, paused } : state.snapshot,
+        snapshot: {
+          ...snapshot,
+          chatMessages: dedupeChat([
+            ...(state.snapshot?.chatMessages || snapshot.chatMessages),
+            ...(assistantMessage ? [assistantMessage] : []),
+          ]),
+        },
+        isSendingChat: false,
+        error: null,
+        agentPath: appendPath(state.agentPath, snapshot.agent.position),
+      }))
+    } catch (error) {
+      const base = get().snapshot || current
+      const localReply: GroundedChatMessage = {
+        id: makeId(),
+        role: 'agent',
+        tick: base.tick,
+        timestamp: nowIso(),
+        content: fallbackAgentReply(base, content),
+        grounding: `fallback • tick ${base.tick}`,
+      }
+
+      const messageText = error instanceof Error ? error.message : 'Unable to send chat message'
+      set((state) => ({
+        snapshot: state.snapshot
+          ? { ...state.snapshot, chatMessages: [...state.snapshot.chatMessages, localReply] }
+          : { ...base, chatMessages: [...base.chatMessages, localReply] },
+        isSendingChat: false,
+        error: `Chat sent in fallback mode. ${messageText}`,
       }))
     }
   },
 
-  selectEntity: (entityId) => set({ selectedEntityId: entityId }),
+  togglePause: async () => {
+    set((state) => {
+      if (!state.snapshot) return state
+      return {
+        snapshot: {
+          ...state.snapshot,
+          paused: !state.snapshot.paused,
+        },
+      }
+    })
+  },
+
+  selectEntity: (entityId: string | null) => {
+    set({ selectedEntityId: entityId })
+  },
 }))
