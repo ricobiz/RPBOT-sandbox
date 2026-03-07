@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from simulation import SimulationEngine
 
 
-app = FastAPI(title="RPBOT Simulation Backend", version="0.1.0")
+app = FastAPI(title="rpbot-sandbox-backend", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
