@@ -153,7 +153,16 @@ const getBackendBaseUrl = () => {
 
 const apiUrl = (path: string) => {
   const base = getBackendBaseUrl()
-  return base ? `${base}${path}` : path
+
+  if (base) {
+    return `${base}${path}`
+  }
+
+  if (typeof window !== 'undefined') {
+    return `${window.location.origin}${path}`
+  }
+
+  return `${DEFAULT_LOCAL_BACKEND_URL}${path}`
 }
 
 const createFallbackSnapshot = (): SimulationSnapshot => ({
