@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+pydantic
+cors
+git+https://github.com/ricobiz/RPBOT-rpmodule.git
