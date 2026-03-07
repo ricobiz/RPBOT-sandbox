@@ -70,7 +70,7 @@ const AgentStatus: React.FC = () => {
       <div className="mt-3 grid grid-cols-2 gap-2">
         <StatMeter label="Energy" value={snapshot.physicalCondition.energy} />
         <StatMeter label="Stamina" value={snapshot.physicalCondition.stamina} />
-        <StatMeter label="Stress" value={1 - snapshot.physicalCondition.stress} />
+        <StatMeter label="Calm" value={1 - stressLoad} />
         <StatMeter label="Health" value={snapshot.physicalCondition.health} />
       </div>
     </section>
