@@ -1,29 +1,33 @@
 {
-  "name": "frontend",
+  "name": "rpbot-sandbox-frontend",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "next": "latest",
-    "react": "latest",
-    "react-dom": "latest",
+    "next": "14.2.16",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
     "three": "^0.152.2",
     "@react-three/fiber": "^8.13.6",
     "@react-three/drei": "^9.73.2",
     "lucide-react": "^0.292.0",
-    "zustand": "^4.3.8",
-    "tailwindcss": "^3.4.0",
-    "postcss": "^8.4.27",
-    "autoprefixer": "^10.4.14"
+    "zustand": "^4.5.5"
   },
   "devDependencies": {
     "typescript": "^5.3.3",
+    "@types/node": "^20.11.30",
     "@types/react": "^18.2.14",
-    "@types/react-dom": "^18.2.6"
+    "@types/react-dom": "^18.2.6",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "14.2.16",
+    "tailwindcss": "^3.4.0",
+    "postcss": "^8.4.27",
+    "autoprefixer": "^10.4.14"
   }
 }
