@@ -112,6 +112,7 @@ const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
 
 const toNumber = (value: unknown, fallback = 0) => (typeof value === 'number' && Number.isFinite(value) ? value : fallback)
+const toOptionalNumber = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : undefined)
 
 const toVector3 = (value: unknown, fallback: Vector3 = [0, 0, 0]): Vector3 => {
   if (!Array.isArray(value)) return fallback
