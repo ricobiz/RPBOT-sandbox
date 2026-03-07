@@ -50,6 +50,13 @@ const Viewport3D: React.FC = () => {
   const snapshot = useSimulationStore((state) => state.snapshot)
   const agentPath = useSimulationStore((state) => state.agentPath)
   const selectedEntityId = useSimulationStore((state) => state.selectedEntityId)
+  const [canRenderScene, setCanRenderScene] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (typeof document === 'undefined') return
+    setCanRenderScene(true)
+  }, [])
 
   const targetEntity = useMemo(
     () => snapshot?.world.entities.find((entity) => entity.id === snapshot.agent.targetEntityId),
