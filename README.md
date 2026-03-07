@@ -139,29 +139,32 @@ The repo is set up to expand into:
 
 ---
 
-## Local development
+## Local development (minimal)
 
-## Backend (current implementation)
+### 1) Start the backend (FastAPI)
 
 ```bash
 cd backend
 python -m venv .venv
 source .venv/bin/activate  # Windows (PowerShell): .venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-python -m uvicorn main:app --reload
+python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Troubleshooting: `/bin/bash: uvicorn: command not found` means `uvicorn` is not installed in the currently active Python environment, or your shell is not seeing that environment’s `bin` directory.
+Backend defaults:
+- URL: `http://127.0.0.1:8000`
+- Health: `GET /health`
+- State: `GET /api/state`
 
-Quick simulation sanity check:
+Optional backend env vars:
+- `BACKEND_CORS_ORIGINS` (default `*`) — comma-separated origins, e.g. `http://localhost:3000,http://127.0.0.1:3000`
+- `PORT` for deployment environments that inject a port value
 
-```bash
-python -c "from simulation import Simulation; sim=Simulation(); sim.step_time(); print(sim.get_state())"
-```
+Root entrypoint compatibility:
+- You can also run from repo root with `python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}`.
+- Root `main.py` re-exports the backend app from `backend/main.py`.
 
-Railway/root entrypoint: run `uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}` from the repository root. The root `main.py` is a thin compatibility wrapper that re-exports the real FastAPI app from `backend/main.py`.
-
-## Frontend
+### 2) Start the frontend (Next.js)
 
 ```bash
 cd frontend
@@ -169,12 +172,25 @@ npm install
 npm run dev
 ```
 
-Production build:
+Frontend defaults:
+- URL: `http://localhost:3000`
+- Scripts:
+  - `npm run dev` (local dev server on port 3000)
+  - `npm run build`
+  - `npm run start` (production server on port 3000)
 
-```bash
-npm run build
-npm run start
-```
+Optional frontend env var:
+- `NEXT_PUBLIC_BACKEND_URL` — explicit backend base URL (example: `http://127.0.0.1:8000`)
+  - If not set, the app auto-targets `localhost:8000` when running locally.
+
+### Optional `rpmodule` integration behavior
+
+`backend/simulation.py` attempts to load one of these optional Python modules if installed:
+- `rpmodule`
+- `rpbot_rpmodule`
+- `RPBOT_rpmodule`
+
+If none are available (or initialization fails), the backend runs with deterministic fallback behavior so the app still starts and endpoints remain usable.
 
 ---
 
