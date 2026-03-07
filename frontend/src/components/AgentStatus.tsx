@@ -1,36 +1,69 @@
+'use client'
+
 import React from 'react'
 import { useSimulationStore } from '../store/useSimulationStore'
-import { Activity, Brain, ArrowRight, Clock } from 'lucide-react'
 
-const AgentStatus: React.FC = () => {
-  const agent = useSimulationStore((state) => state.agent)
+const meterColor = (value: number) => {
+  if (value > 0.7) return 'bg-emerald-500'
+  if (value > 0.4) return 'bg-amber-500'
+  return 'bg-rose-500'
+}
 
+const StatMeter: React.FC<{ label: string; value: number }> = ({ label, value }) => {
+  const pct = Math.round(value * 100)
   return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      padding: '8px 12px',
-      background: '#f5f5f5',
-      borderRadius: '4px',
-      fontFamily: 'sans-serif',
-      fontSize: '14px',
-    }}>
-      <div style={{ marginRight: '12px', fontWeight: 'bold' }}>{agent.name}</div>
-      <div style={{ marginRight: '12px' }}>
-        <span style={{ marginRight: '4px' }}>Goal:</span>{agent.goal}
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs text-slate-600">
+        <span>{label}</span>
+        <span>{pct}%</span>
       </div>
-      <div style={{ marginRight: '12px' }}>
-        <span style={{ marginRight: '4px' }}>Action:</span>{agent.action}
-      </div>
-      <div style={{ marginRight: '12px' }}>
-        <span style={{ marginRight: '4px' }}>Emotion:</span>{agent.emotionalState}
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center' }}>
-        {agent.isThinking && <Brain size={16} style={{ marginRight: '4px' }} />}
-        {agent.isMoving && <ArrowRight size={16} style={{ marginRight: '4px' }} />}
-        <Clock size={16} />
+      <div className="h-2 w-full rounded bg-slate-200">
+        <div className={`h-2 rounded ${meterColor(value)}`} style={{ width: `${pct}%` }} />
       </div>
     </div>
+  )
+}
+
+const AgentStatus: React.FC = () => {
+  const snapshot = useSimulationStore((state) => state.snapshot)
+
+  if (!snapshot) {
+    return (
+      <section className="rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-500">
+        Agent status unavailable.
+      </section>
+    )
+  }
+
+  const topEmotion = [...snapshot.emotions].sort((a, b) => b.intensity - a.intensity).slice(0, 3)
+  const visibleEntityText = snapshot.perceivedNearby.length
+    ? snapshot.perceivedNearby.slice(0, 3).map((entity) => entity.name).join(', ')
+    : 'No nearby entities currently perceived'
+
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="mb-2">
+        <p className="text-xs uppercase tracking-wide text-slate-500">Agent status</p>
+        <p className="text-sm font-semibold text-slate-900">{snapshot.agent.name}</p>
+      </div>
+
+      <div className="space-y-2 text-sm text-slate-800">
+        <p><span className="font-semibold">Doing:</span> {snapshot.plan.currentAction}</p>
+        <p><span className="font-semibold">Goal:</span> {snapshot.goal.text}</p>
+        <p><span className="font-semibold">Sees:</span> {visibleEntityText}</p>
+        <p>
+          <span className="font-semibold">Feels:</span>{' '}
+          {topEmotion.map((emotion) => `${emotion.name} ${Math.round(emotion.intensity * 100)}%`).join(' • ')}
+        </p>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <StatMeter label="Energy" value={snapshot.physicalCondition.energy} />
+        <StatMeter label="Stamina" value={snapshot.physicalCondition.stamina} />
+        <StatMeter label="Stress" value={1 - snapshot.physicalCondition.stress} />
+        <StatMeter label="Health" value={snapshot.physicalCondition.health} />
+      </div>
+    </section>
   )
 }
 
