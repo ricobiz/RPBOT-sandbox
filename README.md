@@ -159,7 +159,7 @@ Quick simulation sanity check:
 python -c "from simulation import Simulation; sim=Simulation(); sim.step_time(); print(sim.get_state())"
 ```
 
-Note: `backend/main.py` is currently a placeholder entry script in this snapshot.
+Railway/root entrypoint: run `uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}` from the repository root. The root `main.py` is a thin compatibility wrapper that re-exports the real FastAPI app from `backend/main.py`.
 
 ## Frontend
 
