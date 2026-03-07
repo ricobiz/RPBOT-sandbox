@@ -14,8 +14,9 @@ const BottomControls: React.FC = () => {
   const isSendingChat = useSimulationStore((state) => state.isSendingChat)
 
   const onSend = async () => {
-    if (!message.trim()) return
-    await sendGroundedChat(message)
+    const text = message.trim()
+    if (!text) return
+    await sendGroundedChat(text)
     setMessage('')
   }
 
