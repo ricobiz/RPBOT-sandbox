@@ -45,6 +45,8 @@ const AgentStatus: React.FC = () => {
   const visibleEntityText = snapshot.perceivedNearby.length
     ? snapshot.perceivedNearby.slice(0, 3).map((entity) => entity.name).join(', ')
     : 'No nearby entities currently perceived'
+  const currentPlanAction = snapshot.plan.currentAction || snapshot.agent.currentAction
+  const stressLoad = normalize01(snapshot.physicalCondition.stress)
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
