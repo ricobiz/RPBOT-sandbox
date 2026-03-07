@@ -1,1 +1,8 @@
-test
+Backend startup target (Railway/Nixpacks):
+python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+
+App path details:
+- Actual FastAPI app object: app (defined in backend/main.py)
+- Launch module path used by command: main:app (root main.py re-exports backend.main.app)
+
+Dependencies are declared in backend/requirements.txt, including uvicorn.
