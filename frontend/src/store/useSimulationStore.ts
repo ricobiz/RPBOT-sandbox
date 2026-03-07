@@ -4,7 +4,11 @@ export type AgentState = {
   name: string
   goal: string
   action: string
-  emotionalState: string
+  emotionalState: Record<string, number>
+  physicalState: {
+    energy: number
+    hunger: number
+  }
   isThinking: boolean
   isMoving: boolean
 }
@@ -23,35 +27,50 @@ export type WorldObject = {
 }
 
 export type SimulationState = {
-  agent: AgentState
+  agents: AgentState[]
   events: EventLog[]
   worldObjects: WorldObject[]
-  setAgentState: (partial: Partial<AgentState>) => void
+  setAgentState: (name: string, partial: Partial<AgentState>) => void
+  addAgent: (agent: AgentState) => void
+  removeAgent: (name: string) => void
   addEvent: (event: Omit<EventLog, 'id' | 'timestamp'>) => void
   setWorldObjects: (objects: WorldObject[]) => void
 }
 
 export const useSimulationStore = create<SimulationState>((set) => ({
-  agent: {
-    name: 'Agent',
-    goal: 'Unknown',
-    action: 'Idle',
-    emotionalState: 'Neutral',
-    isThinking: false,
-    isMoving: false,
-  },
+  agents: [
+    {
+      name: 'Agent',
+      goal: 'Unknown',
+      action: 'Idle',
+      emotionalState: {},
+      physicalState: { energy: 100, hunger: 0 },
+      isThinking: false,
+      isMoving: false,
+    },
+  ],
   events: [],
   worldObjects: [],
-  setAgentState: (partial) => set((state) => ({ agent: { ...state.agent, ...partial } })),
-  addEvent: (event) => set((state) => ({
-    events: [
-      {
-        id: Math.random().toString(36).substr(2, 9),
-        timestamp: Date.now(),
-        ...event,
-      },
-      ...state.events,
-    ],
-  })),
+  setAgentState: (name, partial) =>
+    set((state) => ({
+      agents: state.agents.map((agent) =>
+        agent.name === name ? { ...agent, ...partial } : agent
+      ),
+    })),
+  addAgent: (agent) =>
+    set((state) => ({ agents: [...state.agents, agent] })),
+  removeAgent: (name) =>
+    set((state) => ({ agents: state.agents.filter((agent) => agent.name !== name) })),
+  addEvent: (event) =>
+    set((state) => ({
+      events: [
+        {
+          id: Math.random().toString(36).substr(2, 9),
+          timestamp: Date.now(),
+          ...event,
+        },
+        ...state.events,
+      ],
+    })),
   setWorldObjects: (objects) => set({ worldObjects: objects }),
 }))
