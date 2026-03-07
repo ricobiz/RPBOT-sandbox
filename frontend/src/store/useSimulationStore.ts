@@ -490,7 +490,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
     const paused = !snapshot.paused
 
     try {
-      await requestJson('/simulation/pause', {
+      // await requestJson('/simulation/pause', {
         method: 'POST',
         body: JSON.stringify({ paused }),
       })
