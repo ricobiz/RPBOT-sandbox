@@ -61,6 +61,18 @@ Compatibility entrypoint:
 - Running from repo root also works: `python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}`
 - Root `main.py` re-exports the backend app from `backend/main.py`
 
+### Railway / Nixpacks backend start command
+
+The ASGI app object is `app` in `backend/main.py`, and it is re-exported by root `main.py`.
+
+Use this deterministic Railway start command from the repo root:
+
+```bash
+python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+```
+
+Install backend dependencies from `backend/requirements.txt` so `uvicorn` is always available.
+
 ### 2) Start the frontend (Next.js)
 
 ```bash
