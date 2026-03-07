@@ -198,7 +198,7 @@ const createFallbackSnapshot = (): SimulationSnapshot => ({
   },
   agent: {
     id: 'agent-1',
-    name: 'RPBOT Agent',
+    name: 'rpbot agent',
     position: [0, 0, 0],
     orientation: 0,
     currentAction: 'idle',
