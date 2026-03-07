@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import importlib
 from math import atan2, cos, pi, sin, sqrt
 from typing import Any, Dict, List, Optional, Tuple
@@ -130,12 +130,10 @@ class RPModuleAdapter:
     def _load_optional_module(self) -> None:
         module_candidates = (
             "rpbot_rpmodule",
-            "rpbot_rpmodule",
             "rpmodule",
             "RPBOT_rpmodule",
             "ricobiz.RPBOT_rpmodule",
         )
-
         for name in module_candidates:
             try:
                 self.module = importlib.import_module(name)
@@ -180,10 +178,8 @@ class RPModuleAdapter:
                             if isinstance(result, dict):
                                 return result
             except Exception:
-                # Safe fallback for boot/runtime resilience.
                 pass
 
-        # Minimal deterministic fallback.
         interpretation = payload.get("interpretation", {})
         physical = payload.get("agent", {}).get("physical", {})
         has_user_intent = bool(interpretation.get("user_intent"))
@@ -254,10 +250,7 @@ class SimulationEngine:
             "time": round(self.world.time, 3),
             "paused": self.world.paused,
             "agents": len(self.world.agents),
-            "rp_module": {
-                "available": self.rp_adapter.available,
-                "module": self.rp_adapter.module_name,
-            },
+            "rp_module": {"available": self.rp_adapter.available, "module": self.rp_adapter.module_name},
         }
 
     def set_paused(self, paused: bool) -> Dict[str, Any]:
@@ -279,13 +272,7 @@ class SimulationEngine:
         if not cleaned:
             return
         agent.pending_user_messages.append(cleaned)
-        self._record_event(
-            event_type="user_message",
-            source_agent_id=None,
-            target_id=agent_id,
-            position=agent.position,
-            content=cleaned,
-        )
+        self._record_event("user_message", None, agent_id, agent.position, cleaned)
 
     def grounded_chat(self, agent_id: str, message: str, auto_tick: bool = True) -> Dict[str, Any]:
         self.queue_user_chat(agent_id, message)
@@ -293,29 +280,17 @@ class SimulationEngine:
             tick_result = self.tick(dt=1.0, steps=1)
             response = tick_result.get("updates", [{}])[-1].get("response", "")
         else:
-            agent = self.world.agents.get(agent_id)
-            response = agent.last_response if agent else ""
+            response = self.world.agents[agent_id].last_response
 
-        return {
-            "status": "ok",
-            "response": response,
-            "state": self.get_state(),
-        }
+        return {"status": "ok", "response": response, "state": self.get_state()}
 
     def tick(self, dt: float = 1.0, steps: int = 1) -> Dict[str, Any]:
         dt = max(0.05, min(dt, 5.0))
         steps = max(1, min(steps, 120))
-
         updates: List[Dict[str, Any]] = []
+
         if self.world.paused:
-            return {
-                "status": "ok",
-                "tick": self.world.tick,
-                "time": round(self.world.time, 3),
-                "steps": 0,
-                "updates": updates,
-                "state": self.get_state(),
-            }
+            return {"status": "ok", "tick": self.world.tick, "time": round(self.world.time, 3), "steps": 0, "updates": updates, "state": self.get_state()}
 
         for _ in range(steps):
             self.world.tick += 1
@@ -323,7 +298,7 @@ class SimulationEngine:
 
             for agent in self.world.agents.values():
                 perception = self._perceive(agent)
-                interpretation = self._interpret(agent, perception)
+                interpretation = self._interpret(perception)
                 rp_result = self.rp_adapter.evaluate(
                     {
                         "world": {"tick": self.world.tick, "time": self.world.time, "scene_id": self.scene_id},
@@ -334,19 +309,14 @@ class SimulationEngine:
                             "emotion": vars(agent.emotional_state),
                             "physical": vars(agent.physical_state),
                         },
-                        "perception": {
-                            "nearby_visible_objects": perception.nearby_visible_objects,
-                            "nearby_visible_agents": perception.nearby_visible_agents,
-                            "user_messages": perception.user_messages,
-                            "recent_events": perception.recent_events,
-                        },
+                        "perception": self._serialize_perception(perception),
                         "interpretation": interpretation,
                     }
                 )
 
                 self._apply_rp_output(agent, rp_result, dt)
                 goal = self._select_goal(agent, perception, interpretation, rp_result)
-                plan = self._plan(agent, goal, perception)
+                plan = self._plan(agent, goal)
                 action_summary = self._act(agent, dt)
                 response = self._respond(agent, perception, interpretation, rp_result)
                 self._update_memory(agent, goal, plan, action_summary, response)
@@ -372,20 +342,19 @@ class SimulationEngine:
 
     def get_events(self, limit: int = 50) -> List[Dict[str, Any]]:
         capped = max(1, min(limit, 500))
-        return [self._serialize_event(event) for event in self.world.recent_events[-capped:]]
+        return [self._serialize_event(e) for e in self.world.recent_events[-capped:]]
 
     def get_timeline(self, limit: int = 50) -> List[Dict[str, Any]]:
-        events = self.get_events(limit)
         return [
             {
-                "id": item["id"],
-                "tick": item["tick"],
-                "timestamp": item["timestamp"],
-                "category": item["event_type"],
-                "content": item["content"],
-                "source_agent_id": item.get("source_agent_id"),
+                "id": event["id"],
+                "tick": event["tick"],
+                "timestamp": event["timestamp"],
+                "category": event["event_type"],
+                "content": event["content"],
+                "source_agent_id": event.get("source_agent_id"),
             }
-            for item in events
+            for event in self.get_events(limit)
         ]
 
     def get_state(self) -> Dict[str, Any]:
@@ -394,14 +363,11 @@ class SimulationEngine:
             "time": round(self.world.time, 3),
             "paused": self.world.paused,
             "scene_id": self.scene_id,
-            "agents": {agent_id: self._serialize_agent(agent) for agent_id, agent in self.world.agents.items()},
-            "objects": {object_id: self._serialize_object(obj) for object_id, obj in self.world.objects.items()},
-            "perceptions": {
-                agent_id: self._serialize_perception(agent.last_perception)
-                for agent_id, agent in self.world.agents.items()
-            },
-            "events": self.get_events(limit=120),
-            "timeline": self.get_timeline(limit=120),
+            "agents": {agent_id: self._serialize_agent(a) for agent_id, a in self.world.agents.items()},
+            "objects": {object_id: self._serialize_object(o) for object_id, o in self.world.objects.items()},
+            "perceptions": {agent_id: self._serialize_perception(a.last_perception) for agent_id, a in self.world.agents.items()},
+            "events": self.get_events(120),
+            "timeline": self.get_timeline(120),
         }
 
     def _perceive(self, agent: AgentState) -> PerceptionResult:
@@ -427,12 +393,7 @@ class SimulationEngine:
             dist = _distance(agent.position, other.position)
             if dist <= agent.vision_range:
                 visible_agents.append(
-                    {
-                        "id": other.id,
-                        "name": other.name,
-                        "position": [other.position[0], other.position[1]],
-                        "distance": round(dist, 3),
-                    }
+                    {"id": other.id, "name": other.name, "position": [other.position[0], other.position[1]], "distance": round(dist, 3)}
                 )
 
         recent_events = [
@@ -450,7 +411,7 @@ class SimulationEngine:
         agent.last_perception = perception
         return perception
 
-    def _interpret(self, agent: AgentState, perception: PerceptionResult) -> Dict[str, Any]:
+    def _interpret(self, perception: PerceptionResult) -> Dict[str, Any]:
         text = " ".join(perception.user_messages).lower()
         threat_level = 0.0
         for token in ("danger", "urgent", "alert", "help", "threat"):
@@ -476,25 +437,19 @@ class SimulationEngine:
         }
 
     def _apply_rp_output(self, agent: AgentState, rp_result: Dict[str, Any], dt: float) -> None:
-        emotion_delta = rp_result.get("emotion_delta") or rp_result.get("emotional_delta") or {}
-        physical_delta = rp_result.get("physical_delta") or {}
-
-        for key, value in emotion_delta.items():
+        for key, value in (rp_result.get("emotion_delta") or rp_result.get("emotional_delta") or {}).items():
             if hasattr(agent.emotional_state, key):
-                current = getattr(agent.emotional_state, key)
-                setattr(agent.emotional_state, key, _clamp(current + _to_number(value, 0.0) * dt, 0.0, 1.0))
+                setattr(agent.emotional_state, key, _clamp(getattr(agent.emotional_state, key) + _to_number(value, 0.0) * dt))
 
-        for key, value in physical_delta.items():
+        for key, value in (rp_result.get("physical_delta") or {}).items():
             if hasattr(agent.physical_state, key):
-                current = getattr(agent.physical_state, key)
-                setattr(agent.physical_state, key, _clamp(current + _to_number(value, 0.0) * dt, 0.0, 1.0))
+                setattr(agent.physical_state, key, _clamp(getattr(agent.physical_state, key) + _to_number(value, 0.0) * dt))
 
-        # Baseline simulation drift so state evolves even with no module output.
-        agent.physical_state.energy = _clamp(agent.physical_state.energy - (0.005 * dt), 0.0, 1.0)
-        agent.physical_state.stamina = _clamp(agent.physical_state.stamina - (0.004 * dt), 0.0, 1.0)
-        agent.physical_state.hunger = _clamp(agent.physical_state.hunger + (0.008 * dt), 0.0, 1.0)
-        agent.physical_state.stress_load = _clamp(agent.physical_state.stress_load + (0.002 * dt), 0.0, 1.0)
-        agent.emotional_state.fatigue_feel = _clamp(1.0 - agent.physical_state.energy, 0.0, 1.0)
+        agent.physical_state.energy = _clamp(agent.physical_state.energy - (0.005 * dt))
+        agent.physical_state.stamina = _clamp(agent.physical_state.stamina - (0.004 * dt))
+        agent.physical_state.hunger = _clamp(agent.physical_state.hunger + (0.008 * dt))
+        agent.physical_state.stress_load = _clamp(agent.physical_state.stress_load + (0.002 * dt))
+        agent.emotional_state.fatigue_feel = _clamp(1.0 - agent.physical_state.energy)
 
     def _select_goal(
         self,
@@ -504,89 +459,59 @@ class SimulationEngine:
         rp_result: Dict[str, Any],
     ) -> GoalState:
         bias = rp_result.get("goal_bias") or {}
-
         scores = {
-            "respond_user": _to_number(bias.get("respond_user"), 0.0)
-            + (0.65 if interpretation.get("has_user_messages") else 0.0),
-            "seek_food": _to_number(bias.get("seek_food"), 0.0)
-            + max(0.0, agent.physical_state.hunger - 0.58),
+            "respond_user": _to_number(bias.get("respond_user"), 0.0) + (0.65 if interpretation.get("has_user_messages") else 0.0),
+            "seek_food": _to_number(bias.get("seek_food"), 0.0) + max(0.0, agent.physical_state.hunger - 0.58),
             "rest": _to_number(bias.get("rest"), 0.0) + max(0.0, 0.45 - agent.physical_state.energy),
             "patrol": _to_number(bias.get("patrol"), 0.15),
         }
-
         if perception.nearby_visible_objects:
             scores["patrol"] += 0.1
 
         goal_name = max(scores, key=scores.get)
-        if goal_name == "respond_user":
-            reason = "Pending user input"
-        elif goal_name == "seek_food":
-            reason = "Hunger above comfort threshold"
-        elif goal_name == "rest":
-            reason = "Energy conservation"
-        else:
-            reason = "Routine environment scan"
-
-        agent.current_goal = GoalState(name=goal_name, priority=_clamp(scores[goal_name], 0.0, 1.0), reason=reason)
+        reason = {
+            "respond_user": "Pending user input",
+            "seek_food": "Hunger above comfort threshold",
+            "rest": "Energy conservation",
+            "patrol": "Routine environment scan",
+        }[goal_name]
+        agent.current_goal = GoalState(name=goal_name, priority=_clamp(scores[goal_name]), reason=reason)
         return agent.current_goal
 
-    def _plan(self, agent: AgentState, goal: GoalState, perception: PerceptionResult) -> PlanState:
-        steps: List[str]
+    def _plan(self, agent: AgentState, goal: GoalState) -> PlanState:
         if goal.name == "respond_user":
             steps = ["orient-to-user", "compose-grounded-response", "deliver-response"]
             action = ActionState(name="orient", status="running", duration=0.8)
         elif goal.name == "seek_food":
-            crate = next((obj for obj in perception.nearby_visible_objects if obj.get("id") == "obj-crate"), None)
-            target = tuple(crate["position"]) if crate else self._patrol_target(agent)
+            target = self.world.objects["obj-crate"].position if "obj-crate" in self.world.objects else self._patrol_target()
             steps = ["navigate-to-food-source", "interact", "recover"]
-            action = ActionState(name="walk", status="running", target_id="obj-crate", target_position=(target[0], target[1]), duration=3.0)
+            action = ActionState(name="walk", status="running", target_id="obj-crate", target_position=target, duration=3.0)
         elif goal.name == "rest":
             steps = ["reduce-activity", "stabilize-state"]
             action = ActionState(name="idle", status="running", duration=1.5)
         else:
-            target = self._patrol_target(agent)
+            target = self._patrol_target()
             steps = ["scan-nearby", "reposition", "observe"]
             action = ActionState(name="walk", status="running", target_position=target, duration=2.2)
 
-        plan = PlanState(steps=steps, cursor=min(1, max(0, len(steps) - 1)))
-        agent.current_plan = plan
+        agent.current_plan = PlanState(steps=steps, cursor=0)
         agent.current_action = action
-        return plan
+        return agent.current_plan
 
     def _act(self, agent: AgentState, dt: float) -> Dict[str, Any]:
         action = agent.current_action
-        action.elapsed = _clamp(action.elapsed + dt, 0.0, action.duration if action.duration > 0 else dt)
+        action.elapsed = min(action.duration if action.duration > 0 else dt, action.elapsed + dt)
         moved = False
 
         if action.name == "walk" and action.target_position is not None:
             moved = self._move_toward(agent, action.target_position, dt)
             if moved:
-                self._record_event(
-                    event_type="move",
-                    source_agent_id=agent.id,
-                    target_id=action.target_id,
-                    position=agent.position,
-                    content=f"{agent.name} moved toward target",
-                )
-
-        if action.name == "interact" and action.target_id:
-            self._record_event(
-                event_type="interact",
-                source_agent_id=agent.id,
-                target_id=action.target_id,
-                position=agent.position,
-                content=f"{agent.name} interacts with {action.target_id}",
-            )
+                self._record_event("move", agent.id, action.target_id, agent.position, f"{agent.name} moved toward target")
 
         if action.elapsed >= max(0.1, action.duration):
             action.status = "done"
 
-        return {
-            "name": action.name,
-            "status": action.status,
-            "moved": moved,
-            "position": [round(agent.position[0], 3), round(agent.position[1], 3)],
-        }
+        return {"name": action.name, "status": action.status, "moved": moved, "position": [agent.position[0], agent.position[1]]}
 
     def _respond(
         self,
@@ -600,40 +525,24 @@ class SimulationEngine:
             text = explicit.strip()
         elif perception.user_messages:
             msg = perception.user_messages[-1]
-            top_objects = ", ".join(obj["name"] for obj in perception.nearby_visible_objects[:3]) or "nothing notable"
-            text = (
-                f"I heard: '{msg}'. "
-                f"Current goal: {agent.current_goal.name}. "
-                f"Nearby: {top_objects}."
-            )
+            nearby = ", ".join(obj["name"] for obj in perception.nearby_visible_objects[:3]) or "nothing notable"
+            text = f"I heard: '{msg}'. Current goal: {agent.current_goal.name}. Nearby: {nearby}."
         elif interpretation.get("threat_level", 0.0) > 0.5:
             text = "Alert: elevated threat cues detected. Staying vigilant."
         else:
             text = "Maintaining patrol and monitoring surroundings."
 
         if text != agent.last_response:
-            self._record_event(
-                event_type="agent_response",
-                source_agent_id=agent.id,
-                target_id=None,
-                position=agent.position,
-                content=text,
-            )
+            self._record_event("agent_response", agent.id, None, agent.position, text)
 
         agent.last_response = text
         agent.pending_user_messages.clear()
         return text
 
-    def _update_memory(
-        self,
-        agent: AgentState,
-        goal: GoalState,
-        plan: PlanState,
-        action_summary: Dict[str, Any],
-        response: str,
-    ) -> None:
-        summary = (
+    def _update_memory(self, agent: AgentState, goal: GoalState, plan: PlanState, action_summary: Dict[str, Any], response: str) -> None:
+        content = (
             f"goal={goal.name} priority={goal.priority:.2f}; "
+            f"plan_step={plan.steps[0] if plan.steps else 'none'}; "
             f"action={action_summary.get('name')} status={action_summary.get('status')}; "
             f"response={response[:80]}"
         )
@@ -643,7 +552,7 @@ class SimulationEngine:
                 tick=self.world.tick,
                 time=self.world.time,
                 category="decision",
-                content=summary,
+                content=content,
                 confidence=0.9,
             )
         )
@@ -651,34 +560,24 @@ class SimulationEngine:
             agent.memory = agent.memory[-120:]
 
     def _move_toward(self, agent: AgentState, target: Vector2, dt: float) -> bool:
-        ax, ay = agent.position
-        tx, ty = target
-        dx = tx - ax
-        dy = ty - ay
+        dx = target[0] - agent.position[0]
+        dy = target[1] - agent.position[1]
         distance = sqrt((dx * dx) + (dy * dy))
         if distance <= 0.02:
             return False
-
         step = min(distance, agent.walk_speed * dt)
-        nx = ax + (dx / distance) * step
-        ny = ay + (dy / distance) * step
+        nx = agent.position[0] + (dx / distance) * step
+        ny = agent.position[1] + (dy / distance) * step
         agent.position = (round(nx, 4), round(ny, 4))
         agent.facing_radians = atan2(dy, dx)
         return True
 
-    def _patrol_target(self, agent: AgentState) -> Vector2:
+    def _patrol_target(self) -> Vector2:
         radius = 2.8
         angle = (self.world.time * 0.35) % (2 * pi)
         return (round(cos(angle) * radius, 4), round(sin(angle) * radius, 4))
 
-    def _record_event(
-        self,
-        event_type: str,
-        source_agent_id: Optional[str],
-        target_id: Optional[str],
-        position: Vector2,
-        content: str,
-    ) -> None:
+    def _record_event(self, event_type: str, source_agent_id: Optional[str], target_id: Optional[str], position: Vector2, content: str) -> None:
         self.world.recent_events.append(
             SimulationEvent(
                 id=self._next_event_id(),
@@ -693,16 +592,6 @@ class SimulationEngine:
         )
         if len(self.world.recent_events) > 500:
             self.world.recent_events = self.world.recent_events[-500:]
-
-    def _serialize_action(self, action: ActionState) -> Dict[str, Any]:
-        return {
-            "name": action.name,
-            "status": action.status,
-            "target_id": action.target_id,
-            "target_position": [action.target_position[0], action.target_position[1]] if action.target_position else None,
-            "duration": round(action.duration, 3),
-            "elapsed": round(action.elapsed, 3),
-        }
 
     def _serialize_agent(self, agent: AgentState) -> Dict[str, Any]:
         return {
@@ -723,15 +612,8 @@ class SimulationEngine:
                 "hunger": round(agent.physical_state.hunger, 4),
                 "stress_load": round(agent.physical_state.stress_load, 4),
             },
-            "current_goal": {
-                "name": agent.current_goal.name,
-                "priority": round(agent.current_goal.priority, 4),
-                "reason": agent.current_goal.reason,
-            },
-            "current_plan": {
-                "steps": list(agent.current_plan.steps),
-                "cursor": agent.current_plan.cursor,
-            },
+            "current_goal": {"name": agent.current_goal.name, "priority": round(agent.current_goal.priority, 4), "reason": agent.current_goal.reason},
+            "current_plan": {"steps": list(agent.current_plan.steps), "cursor": agent.current_plan.cursor},
             "current_action": self._serialize_action(agent.current_action),
             "last_response": agent.last_response,
             "memory": [
@@ -749,23 +631,23 @@ class SimulationEngine:
         }
 
     def _serialize_object(self, obj: WorldObject) -> Dict[str, Any]:
-        payload = {
-            "id": obj.id,
-            "name": obj.name,
-            "kind": obj.kind,
-            "position": [round(obj.position[0], 4), round(obj.position[1], 4)],
-        }
+        payload = {"id": obj.id, "name": obj.name, "kind": obj.kind, "position": [round(obj.position[0], 4), round(obj.position[1], 4)]}
         payload.update(obj.metadata)
         return payload
 
+    def _serialize_action(self, action: ActionState) -> Dict[str, Any]:
+        return {
+            "name": action.name,
+            "status": action.status,
+            "target_id": action.target_id,
+            "target_position": [action.target_position[0], action.target_position[1]] if action.target_position else None,
+            "duration": round(action.duration, 3),
+            "elapsed": round(action.elapsed, 3),
+        }
+
     def _serialize_perception(self, perception: Optional[PerceptionResult]) -> Dict[str, Any]:
         if perception is None:
-            return {
-                "nearby_visible_objects": [],
-                "nearby_visible_agents": [],
-                "user_messages": [],
-                "recent_events": [],
-            }
+            return {"nearby_visible_objects": [], "nearby_visible_agents": [], "user_messages": [], "recent_events": []}
         return {
             "nearby_visible_objects": perception.nearby_visible_objects,
             "nearby_visible_agents": perception.nearby_visible_agents,
@@ -796,7 +678,6 @@ class SimulationEngine:
         return f"mem-{self._memory_counter:06d}"
 
 
-# ---- helpers ----
 def _distance(a: Vector2, b: Vector2) -> float:
     return sqrt(((a[0] - b[0]) ** 2) + ((a[1] - b[1]) ** 2))
 
@@ -810,5 +691,5 @@ def _to_number(value: Any, fallback: float) -> float:
 
 
 def _iso_from_seconds(seconds: float) -> str:
-    base = datetime.fromtimestamp(0, tz=timezone.utc)
-    return (base.timestamp() + seconds and datetime.fromtimestamp(seconds, tz=timezone.utc)).isoformat()
+    base = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    return (base + timedelta(seconds=float(max(0.0, seconds)))).isoformat()
