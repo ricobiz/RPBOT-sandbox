@@ -69,13 +69,13 @@ const Viewport3D: React.FC = () => {
   )
 
   if (!snapshot) {
-    return <div className="flex h-64 items-center justify-center rounded-xl bg-slate-200 text-sm text-slate-600">Loading viewport…</div>
+    return <div className="flex h-56 items-center justify-center rounded-xl bg-slate-200 text-sm text-slate-600">Loading viewport…</div>
   }
 
   const pathPoints = agentPath.map((p) => [p[0], 0.05, p[2]] as [number, number, number])
 
   return (
-    <div className="h-64 overflow-hidden rounded-xl border border-slate-200 bg-slate-950">
+    <div className="h-56 overflow-hidden rounded-xl border border-slate-200 bg-slate-950">
       <Canvas camera={{ position: [0, 6, 7], fov: 48 }}>
         <ambientLight intensity={0.8} />
         <directionalLight intensity={1.1} position={[5, 7, 3]} />
@@ -122,7 +122,12 @@ const HomePage: React.FC = () => {
   const snapshot = useSimulationStore((state) => state.snapshot)
   const loading = useSimulationStore((state) => state.loading)
   const error = useSimulationStore((state) => state.error)
+  const isAdvancing = useSimulationStore((state) => state.isAdvancing)
+  const isSendingChat = useSimulationStore((state) => state.isSendingChat)
   const loadInitialState = useSimulationStore((state) => state.loadInitialState)
+  const advanceTicks = useSimulationStore((state) => state.advanceTicks)
+  const sendGroundedChat = useSimulationStore((state) => state.sendGroundedChat)
+  const togglePause = useSimulationStore((state) => state.togglePause)
   const selectEntity = useSimulationStore((state) => state.selectEntity)
   const selectedEntityId = useSimulationStore((state) => state.selectedEntityId)
 
@@ -131,77 +136,33 @@ const HomePage: React.FC = () => {
   }, [loadInitialState])
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 bg-slate-100 px-3 pb-24 pt-3 text-slate-900">
+    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 bg-slate-100 px-3 py-3 text-slate-900">
       <header className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
         <h1 className="text-base font-semibold">RPBOT Mobile Simulation Sandbox</h1>
-        <p className="text-xs text-slate-600">Observe exactly what the agent sees, feels, remembers, and does.</p>
+        <p className="text-xs text-slate-600">Grounded agent state, timeline, and controls in a compact mobile layout.</p>
         <div className="mt-2 text-xs text-slate-500">
           {loading ? 'Loading simulation…' : `Tick ${snapshot?.tick ?? '-'} • t=${snapshot?.timeSeconds ?? '-'}s • ${snapshot?.paused ? 'Paused' : 'Running'}`}
         </div>
         {error ? <p className="mt-1 text-xs text-amber-700">{error}</p> : null}
       </header>
 
-      <Viewport3D />
-
-      <AgentStatus />
-
-      <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-        <p className="text-xs uppercase tracking-wide text-slate-500">Emotional + physical state</p>
-        <div className="mt-2 space-y-1 text-sm">
-          <p><span className="font-semibold">Feels:</span> {snapshot?.emotions.map((e) => `${e.name} ${Math.round(e.intensity * 100)}%`).join(' • ') || 'Unknown'}</p>
-          <p><span className="font-semibold">Body:</span> energy {Math.round((snapshot?.physicalCondition.energy || 0) * 100)}%, stamina {Math.round((snapshot?.physicalCondition.stamina || 0) * 100)}%, stress {Math.round((snapshot?.physicalCondition.stress || 0) * 100)}%, health {Math.round((snapshot?.physicalCondition.health || 0) * 100)}%</p>
-        </div>
+      <section className="space-y-2 rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
+        <p className="px-1 text-xs uppercase tracking-wide text-slate-500">Scene viewport</p>
+        <Viewport3D />
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-        <p className="text-xs uppercase tracking-wide text-slate-500">Goal + plan/action</p>
-        <p className="mt-1 text-sm"><span className="font-semibold">Current goal:</span> {snapshot?.goal.text || 'Unknown'}</p>
-        <p className="mt-1 text-sm"><span className="font-semibold">Current action:</span> {snapshot?.plan.currentAction || 'Unknown'}</p>
-        <div className="mt-2 space-y-1 text-xs text-slate-700">
-          {(snapshot?.plan.steps || []).map((step, idx) => (
-            <p key={step + idx} className={idx === snapshot?.plan.currentStepIndex ? 'font-semibold text-slate-900' : ''}>
-              {idx === snapshot?.plan.currentStepIndex ? '→ ' : '• '}
-              {step}
-            </p>
-          ))}
-        </div>
-      </section>
+      <AgentStatus snapshot={snapshot} selectedEntityId={selectedEntityId} onSelectEntity={selectEntity} />
 
-      <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-        <p className="text-xs uppercase tracking-wide text-slate-500">Perceived nearby entities</p>
-        <p className="mb-2 text-xs text-slate-600">Tap to inspect/debug selection in viewport.</p>
-        <div className="space-y-2">
-          {(snapshot?.perceivedNearby || []).map((entity) => (
-            <button
-              key={entity.id}
-              onClick={() => selectEntity(entity.id)}
-              className={`w-full rounded-lg border p-2 text-left text-sm ${selectedEntityId === entity.id ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-slate-50'}`}
-            >
-              <p className="font-semibold text-slate-900">{entity.name}</p>
-              <p className="text-xs text-slate-600">{entity.type} • distance {entity.distance?.toFixed(2) ?? 'n/a'} • status {entity.status || 'observed'}</p>
-            </button>
-          ))}
-          {snapshot?.perceivedNearby.length === 0 ? <p className="text-sm text-slate-500">Agent currently sees no nearby entities.</p> : null}
-        </div>
-      </section>
+      <EventTimeline snapshot={snapshot} />
 
-      <EventTimeline />
-
-      <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-        <p className="text-xs uppercase tracking-wide text-slate-500">Grounded chat</p>
-        <p className="mb-2 text-xs text-slate-600">Messages are tied to simulation tick and current world grounding.</p>
-        <div className="max-h-56 space-y-2 overflow-y-auto">
-          {(snapshot?.chatMessages || []).map((msg) => (
-            <div key={msg.id} className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-sm">
-              <p className="text-xs uppercase tracking-wide text-slate-500">{msg.role} • tick {msg.tick}</p>
-              <p className="text-slate-900">{msg.content}</p>
-              {msg.grounding ? <p className="mt-1 text-xs text-slate-600">{msg.grounding}</p> : null}
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <BottomControls />
+      <BottomControls
+        snapshot={snapshot}
+        isAdvancing={isAdvancing}
+        isSendingChat={isSendingChat}
+        onAdvanceTicks={advanceTicks}
+        onTogglePause={togglePause}
+        onSendGroundedChat={sendGroundedChat}
+      />
     </main>
   )
 }
