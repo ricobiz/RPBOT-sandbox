@@ -1,116 +1,178 @@
 # RPBOT Sandbox
 
-A sandbox for experimenting with the **RPBOT** agent architecture. The project consists of a **Next.js** frontend, a **FastAPI** backend that runs the simulation engine, and the **RPBOT‑rpmodule** that implements the agent’s perception, planning, and control logic.
+State-driven AI sandbox prototype for experimenting with autonomous-agent loops in a web UI.
+
+This repo is currently an MVP scaffold with:
+- a Python simulation core (`backend/simulation.py`)
+- a lightweight backend entry placeholder (`backend/main.py`)
+- an iPhone-first-style Next.js UI shell with agent/event state store (`frontend/...`)
+
+It is designed to mirror key ideas from [`ricobiz/RPBOT-rpmodule`](https://github.com/ricobiz/RPBOT-rpmodule): structured agent state, perception limits, evolving internal condition, goal/action progression, and response grounding in simulation state.
 
 ---
 
-## Architecture Overview
+## What the app is (current state)
 
-```
-+-------------------+          +-------------------+          +-------------------+
-|  Next.js Frontend | <------> |  FastAPI Backend  | <------> |  RPBOT‑rpmodule   |
-+-------------------+          +-------------------+          +-------------------+
-        ▲                               ▲                           ▲
-        │                               │                           │
-        │  HTTP (REST)                  │  HTTP (REST)              │  Python API
-        │                               │                           │
-```
+The rebuilt project is a **realistic state-driven AI sandbox foundation** where simulation state drives what the agent can perceive, decide, do, remember, and report.
 
-* **Next.js** – A React‑based UI that renders a 3D scene with `three.js` and provides controls for the user to interact with the simulation.
-* **FastAPI** – Exposes REST endpoints for starting/stopping the simulation, retrieving agent status, and streaming events. It also hosts the simulation loop that updates the world state.
-* **RPBOT‑rpmodule** – A Python package that implements the agent’s perception, planning, and control logic. It communicates with the simulation via the FastAPI backend.
+### Current MVP scene and UI
+
+Current scene/model state is intentionally simple:
+- one default scene (`default`)
+- one `robot` object with position + velocity
+- time advancing in discrete ticks (`step_time()`)
+
+Current UI (mobile/vertical-first structure):
+- **3D Scene placeholder panel** (`frontend/src/app/page.tsx`)
+- **Agent status bar placeholder** (`page.tsx`) plus reusable richer status component (`components/AgentStatus.tsx`)
+- **Event timeline placeholder** (`page.tsx`) plus reusable event component (`components/EventTimeline.tsx`)
+- **Bottom controls + chat input + action sheets** (`components/BottomControls.tsx`)
+- **Global simulation state store** via Zustand (`store/useSimulationStore.ts`)
 
 ---
 
-## Setup & Run Instructions
+## Architecture modules
 
-The repository contains two separate projects: `frontend` and `backend`. Each has its own dependencies.
+The architecture is organized around modules that can be expanded into full multi-agent simulation behavior.
 
-### 1. Clone the repository
+1. **World State**  
+   Implemented in `backend/simulation.py`:
+   - scenes
+   - objects
+   - obstacles
+   - simulation clock
 
-```bash
-git clone https://github.com/ricobiz/RPBOT-sandbox.git
-cd RPBOT-sandbox
-```
+2. **Perception (non-omniscient model)**  
+   `Simulation.get_perception()` returns a **local view** for the robot (robot position + nearby objects), not full world internals. This is the basis for non-omniscient behavior.
 
-### 2. Install the backend
+3. **Memory**  
+   Frontend event logs (`events` in Zustand) already act as short-horizon trace memory. Backend long-term episodic/semantic memory modules are planned extension points.
+
+4. **Goals**  
+   The store includes explicit `goal` state for the agent. Goal policies are currently UI/state-level and ready for backend planner integration.
+
+5. **Action Execution**  
+   `Simulation.apply_action()` currently supports movement actions by updating robot velocity. `Scene.step()` + `Object.update()` execute state transitions over time.
+
+6. **Agent State**  
+   Store tracks:
+   - `goal`
+   - `action`
+   - `emotionalState`
+   - `isThinking`
+   - `isMoving`
+
+7. **Simulation Tick / Time Progression**  
+   `step_time()` advances time in discrete ticks (`dt = 1.0`) and updates all scene objects.
+
+8. **Chat Grounding**  
+   Chat input exists in `BottomControls`. Grounding target is the same shared simulation/agent state (world, events, goals, condition), so chat can be constrained by what the agent actually knows.
+
+9. **UI State**  
+   Zustand central store (`useSimulationStore`) provides deterministic, inspectable UI state transitions for agent status, world objects, and event timeline.
+
+---
+
+## Core loop (target behavior, partially implemented)
+
+The intended loop (already scaffolded in data structures and simulation timing) is:
+
+**perception → interpretation → emotional/physical update → goal selection → plan/action selection → execution → memory update → response generation**
+
+How this maps today:
+- **Perception**: `get_perception()`
+- **Interpretation**: currently minimal/manual (extension point for planner/reasoner)
+- **Emotional/physical update**: represented in agent state fields, with tick hook available in `step_time()`
+- **Goal selection**: `goal` state exists; policy wiring pending
+- **Plan/action selection**: currently simple action dispatch (`apply_action`)
+- **Execution**: object motion in `update()`/`step()`
+- **Memory update**: event timeline/store updates
+- **Response generation**: chat/UI response path scaffolded in controls + status/timeline components
+
+---
+
+## Relation to `RPBOT-rpmodule` concepts
+
+This sandbox integrates/mirrors rpmodule concepts in a staged way:
+
+- **Dynamic emotions**: represented via `emotionalState` in agent state (UI-visible now; decision-coupled logic planned).
+- **Decay / update logic**: simulation tick (`step_time`) provides the exact hook where emotion, urgency, fatigue, and confidence decay/recovery logic can run each tick.
+- **Physical-condition influence**: world physics/state (position/velocity now; stamina/injury/load planned) is intended to feed both action choice and response tone.
+
+In other words: the current codebase provides the structural state machine and timing hooks; deeper rpmodule-grade cognition/condition dynamics are the next layer.
+
+---
+
+## Observability and debugging surfaces
+
+Current debug/observability points:
+- `Simulation.get_state()` for full serializable backend world snapshot
+- `Simulation.get_perception()` for agent-limited observation snapshot
+- frontend event timeline store (`events`) for chronological decision/observation/result traces
+- explicit status fields (`goal`, `action`, `emotionalState`, movement/thinking flags)
+
+These surfaces are designed to make each loop phase inspectable and debuggable.
+
+---
+
+## Multi-agent-ready foundations
+
+Even in MVP form, the structure is prepared for multi-agent growth:
+- world state is scene/object dictionary-based
+- perception API can be called per-agent
+- agent state shape is separable from rendering
+- event log model supports multi-source traces
+
+Adding more agents mainly requires agent registries + per-agent perception/action channels.
+
+---
+
+## Planned extension points
+
+The repo is set up to expand into:
+- additional scenes and scene switching
+- richer object/obstacle types
+- configurable world rules and triggers
+- agent-to-agent communication channels
+- humanoid/character assets and animation state
+- in-app scene editing tools (spawn/edit objects, author rules, save/load scenarios)
+
+---
+
+## Local development
+
+## Backend (current implementation)
 
 ```bash
 cd backend
 pip install -r requirements.txt
 ```
 
-> **Tip**: If you are using a virtual environment, activate it before running the above command.
-
-### 3. Install the frontend
+Quick simulation sanity check:
 
 ```bash
-cd ../frontend
+python -c "from simulation import Simulation; sim=Simulation(); sim.step_time(); print(sim.get_state())"
+```
+
+Note: `backend/main.py` is currently a placeholder entry script in this snapshot.
+
+## Frontend
+
+```bash
+cd frontend
 npm install
-```
-
-### 4. Configure the OpenRouter API key
-
-The RPM module uses the OpenRouter API for language model calls. Create a file named `.env` in the `backend` directory with the following content:
-
-```
-OPENROUTER_API_KEY=your_api_key_here
-```
-
-> **Important**: Do **not** commit this file to version control. The key is kept secret.
-
-### 5. Run the backend
-
-```bash
-cd backend
-uvicorn main:app --reload
-```
-
-The backend will start on `http://127.0.0.1:8000`.
-
-### 6. Run the frontend
-
-```bash
-cd ../frontend
 npm run dev
 ```
 
-The frontend will start on `http://localhost:3000` and will automatically connect to the backend.
-
----
-
-## OpenRouter API Configuration
-
-The RPM module expects the OpenRouter API key to be available as the environment variable `OPENROUTER_API_KEY`. The key is read when the module is imported, so you only need to set it once before launching the backend.
-
-If you prefer to use a different key for a specific run, you can override the environment variable on the command line:
+Production build:
 
 ```bash
-OPENROUTER_API_KEY=another_key uvicorn main:app --reload
+npm run build
+npm run start
 ```
 
 ---
 
-## Simulation Loop, Perception, and Agent Control Flow
+## Summary
 
-The simulation runs in a continuous loop on the backend. Each iteration performs the following steps:
-
-1. **Perception** – The RPM module queries the simulation state (positions, velocities, sensor data) via the FastAPI API. It then processes this data into a structured observation.
-2. **Planning** – Using the observation, the RPM module calls the OpenRouter language model to generate a high‑level plan or action sequence.
-3. **Control** – The plan is translated into low‑level control commands (e.g., steering, acceleration) and sent back to the simulation via the FastAPI API.
-4. **State Update** – The simulation engine updates the world state based on the control commands and physics.
-5. **Event Streaming** – Any significant events (e.g., collisions, goal reached) are emitted through a WebSocket endpoint so the frontend can update the UI in real time.
-
-The frontend visualises the world state and allows the user to pause, resume, or reset the simulation. All communication between the frontend and backend is performed over HTTP/REST, while the simulation loop itself runs on the backend.
-
----
-
-## Contributing
-
-Feel free to open issues or pull requests. Please follow the existing coding style and add tests where appropriate.
-
----
-
-## License
-
-MIT License. See `LICENSE` for details.
+RPBOT Sandbox is now a **state-first AI simulation scaffold**: a deterministic world model + perception boundary + agent/UI state pipeline that mirrors rpmodule design intent and is ready for deeper cognition, emotion/condition dynamics, and multi-agent scenario growth.
