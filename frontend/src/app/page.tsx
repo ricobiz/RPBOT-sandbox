@@ -1,11 +1,8 @@
 'use client'
 
-import React, { useEffect, useMemo, useRef } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { Line } from '@react-three/drei'
-import AgentStatus from '../components/AgentStatus'
-import EventTimeline from '../components/EventTimeline'
-import BottomControls from '../components/BottomControls'
 import { SimActionState, useSimulationStore } from '../store/useSimulationStore'
 
 type AvatarProps = {
@@ -21,11 +18,9 @@ const actionColor: Record<SimActionState, string> = {
   orient: '#3b82f6',
 }
 
-const HumanoidAvatarProxy: React.FC<AvatarProps & { modelUrl?: string }> = ({
-  position,
-  action,
-  orientation,
-}) => {
+const pct = (value: number) => `${Math.round(value * 100)}%`
+
+const HumanoidAvatarProxy: React.FC<AvatarProps> = ({ position, action, orientation }) => {
   const groupRef = useRef<any>(null)
 
   useFrame(({ clock }) => {
@@ -46,14 +41,6 @@ const HumanoidAvatarProxy: React.FC<AvatarProps & { modelUrl?: string }> = ({
         <sphereGeometry args={[0.12, 16, 16]} />
         <meshStandardMaterial color="#e2e8f0" />
       </mesh>
-      <mesh position={[0.08, 1.12, 0.1]}>
-        <sphereGeometry args={[0.02, 8, 8]} />
-        <meshStandardMaterial color="#0f172a" />
-      </mesh>
-      <mesh position={[-0.08, 1.12, 0.1]}>
-        <sphereGeometry args={[0.02, 8, 8]} />
-        <meshStandardMaterial color="#0f172a" />
-      </mesh>
     </group>
   )
 }
@@ -69,13 +56,17 @@ const Viewport3D: React.FC = () => {
   )
 
   if (!snapshot) {
-    return <div className="flex h-64 items-center justify-center rounded-xl bg-slate-200 text-sm text-slate-600">Loading viewport…</div>
+    return (
+      <div className="flex h-56 items-center justify-center rounded-xl border border-slate-300 bg-slate-100 text-sm text-slate-500">
+        No scene data
+      </div>
+    )
   }
 
   const pathPoints = agentPath.map((p) => [p[0], 0.05, p[2]] as [number, number, number])
 
   return (
-    <div className="h-64 overflow-hidden rounded-xl border border-slate-200 bg-slate-950">
+    <div className="h-56 overflow-hidden rounded-xl border border-slate-200 bg-slate-950">
       <Canvas camera={{ position: [0, 6, 7], fov: 48 }}>
         <ambientLight intensity={0.8} />
         <directionalLight intensity={1.1} position={[5, 7, 3]} />
@@ -119,89 +110,199 @@ const Viewport3D: React.FC = () => {
 }
 
 const HomePage: React.FC = () => {
+  const [chatInput, setChatInput] = useState('')
+
   const snapshot = useSimulationStore((state) => state.snapshot)
   const loading = useSimulationStore((state) => state.loading)
   const error = useSimulationStore((state) => state.error)
-  const loadInitialState = useSimulationStore((state) => state.loadInitialState)
-  const selectEntity = useSimulationStore((state) => state.selectEntity)
+  const isAdvancing = useSimulationStore((state) => state.isAdvancing)
+  const isSendingChat = useSimulationStore((state) => state.isSendingChat)
   const selectedEntityId = useSimulationStore((state) => state.selectedEntityId)
+
+  const loadInitialState = useSimulationStore((state) => state.loadInitialState)
+  const advanceTicks = useSimulationStore((state) => state.advanceTicks)
+  const sendGroundedChat = useSimulationStore((state) => state.sendGroundedChat)
+  const togglePause = useSimulationStore((state) => state.togglePause)
+  const selectEntity = useSimulationStore((state) => state.selectEntity)
 
   useEffect(() => {
     loadInitialState()
   }, [loadInitialState])
 
+  const selectedEntity = snapshot?.world.entities.find((entity) => entity.id === selectedEntityId) || null
+
+  const timelineItems = useMemo(() => {
+    if (!snapshot) return []
+
+    return [
+      ...snapshot.recentMemoryUpdates.map((item) => ({
+        id: item.id,
+        tick: item.tick,
+        timestamp: item.timestamp,
+        label: item.type,
+        content: item.content,
+      })),
+      ...snapshot.interactionHistory.map((item) => ({
+        id: item.id,
+        tick: item.tick,
+        timestamp: item.timestamp,
+        label: 'interaction',
+        content: `${item.with}: ${item.summary}`,
+      })),
+    ]
+      .sort((a, b) => (a.tick === b.tick ? (a.timestamp < b.timestamp ? 1 : -1) : b.tick - a.tick))
+      .slice(0, 30)
+  }, [snapshot])
+
+  const onSend = async () => {
+    const text = chatInput.trim()
+    if (!text) return
+    await sendGroundedChat(text)
+    setChatInput('')
+  }
+
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 bg-slate-100 px-3 pb-24 pt-3 text-slate-900">
-      <header className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-        <h1 className="text-base font-semibold">RPBOT Mobile Simulation Sandbox</h1>
-        <p className="text-xs text-slate-600">Observe exactly what the agent sees, feels, remembers, and does.</p>
-        <div className="mt-2 text-xs text-slate-500">
-          {loading ? 'Loading simulation…' : `Tick ${snapshot?.tick ?? '-'} • t=${snapshot?.timeSeconds ?? '-'}s • ${snapshot?.paused ? 'Paused' : 'Running'}`}
+    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 bg-slate-100 px-3 pb-4 pt-3 text-slate-900">
+      <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className="text-sm font-semibold">{snapshot?.agent.name || 'Simulation'}</p>
+          <p className="text-xs text-slate-600">scene {snapshot?.world.sceneId || '-'}</p>
+        </div>
+        <div className="text-xs text-slate-600">
+          {loading ? 'loading' : `tick ${snapshot?.tick ?? '-'} • t=${snapshot?.timeSeconds ?? '-'}s • ${snapshot?.paused ? 'paused' : 'running'}`}
         </div>
         {error ? <p className="mt-1 text-xs text-amber-700">{error}</p> : null}
-      </header>
+      </section>
 
       <Viewport3D />
 
-      <AgentStatus />
-
       <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-        <p className="text-xs uppercase tracking-wide text-slate-500">Emotional + physical state</p>
-        <div className="mt-2 space-y-1 text-sm">
-          <p><span className="font-semibold">Feels:</span> {snapshot?.emotions.map((e) => `${e.name} ${Math.round(e.intensity * 100)}%`).join(' • ') || 'Unknown'}</p>
-          <p><span className="font-semibold">Body:</span> energy {Math.round((snapshot?.physicalCondition.energy || 0) * 100)}%, stamina {Math.round((snapshot?.physicalCondition.stamina || 0) * 100)}%, stress {Math.round((snapshot?.physicalCondition.stress || 0) * 100)}%, health {Math.round((snapshot?.physicalCondition.health || 0) * 100)}%</p>
+        <div className="mb-2 flex items-center justify-between">
+          <p className="text-xs uppercase tracking-wide text-slate-500">State</p>
+          <p className="text-xs text-slate-500">action {snapshot?.agent.currentAction || '-'}</p>
         </div>
-      </section>
-
-      <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-        <p className="text-xs uppercase tracking-wide text-slate-500">Goal + plan/action</p>
-        <p className="mt-1 text-sm"><span className="font-semibold">Current goal:</span> {snapshot?.goal.text || 'Unknown'}</p>
-        <p className="mt-1 text-sm"><span className="font-semibold">Current action:</span> {snapshot?.plan.currentAction || 'Unknown'}</p>
-        <div className="mt-2 space-y-1 text-xs text-slate-700">
-          {(snapshot?.plan.steps || []).map((step, idx) => (
-            <p key={step + idx} className={idx === snapshot?.plan.currentStepIndex ? 'font-semibold text-slate-900' : ''}>
-              {idx === snapshot?.plan.currentStepIndex ? '→ ' : '• '}
-              {step}
-            </p>
+        <div className="space-y-1 text-sm">
+          <p><span className="font-semibold">goal</span> {snapshot?.goal.text || '-'}</p>
+          <p><span className="font-semibold">priority</span> {snapshot?.goal.priority || '-'}</p>
+          <p><span className="font-semibold">plan</span> {snapshot?.plan.currentAction || '-'}</p>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+          <div className="rounded border border-slate-200 bg-slate-50 p-2">energy {pct(snapshot?.physicalCondition.energy || 0)}</div>
+          <div className="rounded border border-slate-200 bg-slate-50 p-2">stamina {pct(snapshot?.physicalCondition.stamina || 0)}</div>
+          <div className="rounded border border-slate-200 bg-slate-50 p-2">stress {pct(snapshot?.physicalCondition.stress || 0)}</div>
+          <div className="rounded border border-slate-200 bg-slate-50 p-2">health {pct(snapshot?.physicalCondition.health || 0)}</div>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1">
+          {(snapshot?.emotions || []).map((emotion) => (
+            <span key={emotion.name} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-xs">
+              {emotion.name} {pct(emotion.intensity)}
+            </span>
           ))}
+          {snapshot && snapshot.emotions.length === 0 ? <span className="text-xs text-slate-500">no emotion data</span> : null}
         </div>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-        <p className="text-xs uppercase tracking-wide text-slate-500">Perceived nearby entities</p>
-        <p className="mb-2 text-xs text-slate-600">Tap to inspect/debug selection in viewport.</p>
+        <p className="mb-2 text-xs uppercase tracking-wide text-slate-500">Observability</p>
         <div className="space-y-2">
           {(snapshot?.perceivedNearby || []).map((entity) => (
             <button
               key={entity.id}
+              type="button"
               onClick={() => selectEntity(entity.id)}
               className={`w-full rounded-lg border p-2 text-left text-sm ${selectedEntityId === entity.id ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-slate-50'}`}
             >
-              <p className="font-semibold text-slate-900">{entity.name}</p>
-              <p className="text-xs text-slate-600">{entity.type} • distance {entity.distance?.toFixed(2) ?? 'n/a'} • status {entity.status || 'observed'}</p>
+              <p className="font-semibold">{entity.name}</p>
+              <p className="text-xs text-slate-600">
+                {entity.type} • d={entity.distance?.toFixed(2) ?? 'n/a'} • {entity.status || 'observed'}
+              </p>
             </button>
           ))}
-          {snapshot?.perceivedNearby.length === 0 ? <p className="text-sm text-slate-500">Agent currently sees no nearby entities.</p> : null}
+          {snapshot?.perceivedNearby.length === 0 ? <p className="text-sm text-slate-500">no perceived entities</p> : null}
         </div>
+        {selectedEntity ? (
+          <div className="mt-2 rounded border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+            selected {selectedEntity.name} @ [{selectedEntity.position.map((n) => n.toFixed(2)).join(', ')}]
+          </div>
+        ) : null}
       </section>
-
-      <EventTimeline />
 
       <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-        <p className="text-xs uppercase tracking-wide text-slate-500">Grounded chat</p>
-        <p className="mb-2 text-xs text-slate-600">Messages are tied to simulation tick and current world grounding.</p>
-        <div className="max-h-56 space-y-2 overflow-y-auto">
-          {(snapshot?.chatMessages || []).map((msg) => (
-            <div key={msg.id} className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-sm">
-              <p className="text-xs uppercase tracking-wide text-slate-500">{msg.role} • tick {msg.tick}</p>
-              <p className="text-slate-900">{msg.content}</p>
-              {msg.grounding ? <p className="mt-1 text-xs text-slate-600">{msg.grounding}</p> : null}
+        <p className="mb-2 text-xs uppercase tracking-wide text-slate-500">Timeline</p>
+        <div className="max-h-48 space-y-2 overflow-y-auto pr-1">
+          {timelineItems.map((item) => (
+            <div key={item.id} className="rounded border border-slate-200 bg-slate-50 p-2 text-sm">
+              <div className="mb-1 flex items-center justify-between text-xs text-slate-500">
+                <span>{item.label}</span>
+                <span>tick {item.tick}</span>
+              </div>
+              <p>{item.content}</p>
             </div>
           ))}
+          {timelineItems.length === 0 ? <p className="text-sm text-slate-500">no timeline events</p> : null}
         </div>
       </section>
 
-      <BottomControls />
+      <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="mb-2 flex items-center justify-between">
+          <p className="text-xs uppercase tracking-wide text-slate-500">Chat</p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => advanceTicks(1)}
+              disabled={isAdvancing || !snapshot || snapshot.paused}
+              className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-40"
+            >
+              +1
+            </button>
+            <button
+              type="button"
+              onClick={() => advanceTicks(5)}
+              disabled={isAdvancing || !snapshot || snapshot.paused}
+              className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-40"
+            >
+              +5
+            </button>
+            <button
+              type="button"
+              onClick={togglePause}
+              disabled={!snapshot}
+              className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-40"
+            >
+              {snapshot?.paused ? 'resume' : 'pause'}
+            </button>
+          </div>
+        </div>
+
+        <div className="mb-2 max-h-56 space-y-2 overflow-y-auto pr-1">
+          {(snapshot?.chatMessages || []).map((message) => (
+            <div key={message.id} className="rounded border border-slate-200 bg-slate-50 p-2 text-sm">
+              <p className="text-xs uppercase tracking-wide text-slate-500">{message.role} • tick {message.tick}</p>
+              <p>{message.content}</p>
+              {message.grounding ? <p className="text-xs text-slate-600">{message.grounding}</p> : null}
+            </div>
+          ))}
+          {snapshot?.chatMessages.length === 0 ? <p className="text-sm text-slate-500">no chat messages</p> : null}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={chatInput}
+            onChange={(event) => setChatInput(event.target.value)}
+            placeholder="message"
+            className="h-10 flex-1 rounded border border-slate-300 px-3 text-sm"
+          />
+          <button
+            type="button"
+            onClick={onSend}
+            disabled={isSendingChat || !chatInput.trim()}
+            className="h-10 rounded bg-blue-600 px-3 text-sm font-semibold text-white disabled:opacity-40"
+          >
+            send
+          </button>
+        </div>
+      </section>
     </main>
   )
 }
