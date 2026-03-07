@@ -56,12 +56,14 @@ const AgentStatus: React.FC = () => {
       </div>
 
       <div className="space-y-2 text-sm text-slate-800">
-        <p><span className="font-semibold">Doing:</span> {snapshot.plan.currentAction}</p>
+        <p><span className="font-semibold">Doing:</span> {currentPlanAction}</p>
         <p><span className="font-semibold">Goal:</span> {snapshot.goal.text}</p>
         <p><span className="font-semibold">Sees:</span> {visibleEntityText}</p>
         <p>
           <span className="font-semibold">Feels:</span>{' '}
-          {topEmotion.map((emotion) => `${emotion.name} ${Math.round(emotion.intensity * 100)}%`).join(' • ')}
+          {topEmotion.length
+            ? topEmotion.map((emotion) => `${emotion.name} ${Math.round(normalize01(emotion.intensity) * 100)}%`).join(' • ')
+            : 'steady'}
         </p>
       </div>
 
