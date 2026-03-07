@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useMemo, useRef } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { Line } from '@react-three/drei'
 import AgentStatus from '../components/AgentStatus'
@@ -50,6 +50,19 @@ const Viewport3D: React.FC = () => {
   const snapshot = useSimulationStore((state) => state.snapshot)
   const agentPath = useSimulationStore((state) => state.agentPath)
   const selectedEntityId = useSimulationStore((state) => state.selectedEntityId)
+  const [sceneReady, setSceneReady] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return
+
+    try {
+      const canvas = document.createElement('canvas')
+      const hasWebGl = !!(canvas.getContext('webgl') || canvas.getContext('experimental-webgl'))
+      setSceneReady(hasWebGl)
+    } catch {
+      setSceneReady(false)
+    }
+  }, [])
 
   const targetEntity = useMemo(
     () => snapshot?.world.entities.find((entity) => entity.id === snapshot.agent.targetEntityId),
@@ -60,6 +73,14 @@ const Viewport3D: React.FC = () => {
     return (
       <div className="flex h-56 items-center justify-center rounded-xl border border-slate-300 bg-slate-100 text-sm text-slate-500">
         No scene data
+      </div>
+    )
+  }
+
+  if (!sceneReady) {
+    return (
+      <div className="flex h-56 items-center justify-center rounded-xl border border-slate-300 bg-slate-100 text-sm text-slate-500">
+        3D preview unavailable on this device.
       </div>
     )
   }
