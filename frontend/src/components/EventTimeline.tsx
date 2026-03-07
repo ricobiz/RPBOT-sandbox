@@ -1,44 +1,56 @@
+'use client'
+
 import React from 'react'
 import { useSimulationStore } from '../store/useSimulationStore'
-import { Brain, Eye, AlertTriangle, CheckCircle, Activity } from 'lucide-react'
-
-const iconMap = {
-  thought: Brain,
-  observation: Eye,
-  decision: Activity,
-  obstacle: AlertTriangle,
-  result: CheckCircle,
-}
 
 const EventTimeline: React.FC = () => {
-  const events = useSimulationStore((state) => state.events)
+  const snapshot = useSimulationStore((state) => state.snapshot)
+
+  if (!snapshot) {
+    return (
+      <section className="rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-500">
+        No memory timeline available.
+      </section>
+    )
+  }
+
+  const timelineItems = [
+    ...snapshot.recentMemoryUpdates.map((item) => ({
+      id: item.id,
+      label: item.type,
+      tick: item.tick,
+      timestamp: item.timestamp,
+      content: item.content,
+    })),
+    ...snapshot.interactionHistory.map((item) => ({
+      id: item.id,
+      label: 'interaction',
+      tick: item.tick,
+      timestamp: item.timestamp,
+      content: `${item.with}: ${item.summary}`,
+    })),
+  ]
+    .sort((a, b) => (a.tick === b.tick ? (a.timestamp < b.timestamp ? 1 : -1) : b.tick - a.tick))
+    .slice(0, 20)
 
   return (
-    <div style={{
-      maxHeight: '400px',
-      overflowY: 'auto',
-      padding: '8px',
-      background: '#fafafa',
-      border: '1px solid #ddd',
-      borderRadius: '4px',
-      fontFamily: 'sans-serif',
-      fontSize: '14px',
-    }}>
-      {events.map((e) => {
-        const Icon = iconMap[e.type] || Activity
-        const date = new Date(e.timestamp)
-        const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        return (
-          <div key={e.id} style={{ display: 'flex', marginBottom: '8px' }}>
-            <Icon size={20} style={{ marginRight: '8px', color: '#555' }} />
-            <div>
-              <div style={{ fontWeight: 'bold' }}>{timeStr}</div>
-              <div>{e.content}</div>
+    <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="mb-2">
+        <p className="text-xs uppercase tracking-wide text-slate-500">Memory / events</p>
+        <p className="text-sm text-slate-700">What the agent remembers and recent interactions</p>
+      </div>
+      <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+        {timelineItems.map((item) => (
+          <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-2">
+            <div className="mb-1 flex items-center justify-between text-xs text-slate-500">
+              <span className="uppercase tracking-wide">{item.label}</span>
+              <span>tick {item.tick}</span>
             </div>
+            <p className="text-sm text-slate-800">{item.content}</p>
           </div>
-        )
-      })}
-    </div>
+        ))}
+      </div>
+    </section>
   )
 }
 
