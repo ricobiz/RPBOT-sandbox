@@ -71,6 +71,14 @@ const Viewport3D: React.FC = () => {
     )
   }
 
+  if (!canRenderScene) {
+    return (
+      <div className="flex h-56 items-center justify-center rounded-xl border border-slate-300 bg-slate-100 text-sm text-slate-500">
+        Initializing scene…
+      </div>
+    )
+  }
+
   const pathPoints = agentPath.map((p) => [p[0], 0.05, p[2]] as [number, number, number])
 
   return (
