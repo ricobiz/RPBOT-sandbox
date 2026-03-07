@@ -110,9 +110,7 @@ type SimulationStore = {
 }
 
 const nowIso = () => new Date().toISOString()
-
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-
 const clamp = (value: number, min = 0, max = 1) => Math.max(min, Math.min(max, value))
 
 const toNumber = (value: unknown, fallback = 0) =>
