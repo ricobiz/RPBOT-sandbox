@@ -6,10 +6,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from simulation import SimulationEngine
+try:
+    from .simulation import SimulationEngine
+except ImportError:
+    from simulation import SimulationEngine
 
 
-app = FastAPI(title="RPBOT Simulation Backend", version="0.1.0")
+app = FastAPI(title="RPBOT Simulation Backend", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,8 +26,8 @@ engine = SimulationEngine()
 
 
 class TickRequest(BaseModel):
-    dt: float = Field(default=1.0, ge=0.1, le=5.0)
-    steps: int = Field(default=1, ge=1, le=50)
+    dt: float = Field(default=1.0, ge=0.05, le=5.0)
+    steps: int = Field(default=1, ge=1, le=120)
 
 
 class ChatRequest(BaseModel):
@@ -33,34 +36,30 @@ class ChatRequest(BaseModel):
     auto_tick: bool = True
 
 
-class QueueChatRequest(BaseModel):
-    message: str = Field(min_length=1)
-    agent_id: str = "agent-1"
-
-
 @app.get("/health")
 def health() -> Dict[str, Any]:
     return {
         "status": "ok",
         "service": "rpbot-simulation-backend",
         "tick": engine.world.tick,
-        "time": engine.world.time,
+        "time": round(engine.world.time, 2),
+        "agents": len(engine.world.agents),
     }
 
 
-@app.get("/simulation/state")
-def simulation_state() -> Dict[str, Any]:
+@app.get("/api/state")
+def api_state() -> Dict[str, Any]:
     return engine.get_state()
 
 
-@app.post("/simulation/tick")
-def simulation_tick(request: Optional[TickRequest] = None) -> Dict[str, Any]:
+@app.post("/api/tick")
+def api_tick(request: Optional[TickRequest] = None) -> Dict[str, Any]:
     payload = request or TickRequest()
     return engine.tick(dt=payload.dt, steps=payload.steps)
 
 
-@app.post("/simulation/chat")
-def simulation_chat(request: ChatRequest) -> Dict[str, Any]:
+@app.post("/api/chat")
+def api_chat(request: ChatRequest) -> Dict[str, Any]:
     try:
         return engine.grounded_chat(
             agent_id=request.agent_id,
@@ -71,26 +70,29 @@ def simulation_chat(request: ChatRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@app.post("/simulation/chat/queue")
-def simulation_chat_queue(request: QueueChatRequest) -> Dict[str, Any]:
-    try:
-        engine.queue_user_chat(request.agent_id, request.message)
-        return {
-            "status": "queued",
-            "agent_id": request.agent_id,
-            "message": request.message,
-            "tick": engine.world.tick,
-            "time": engine.world.time,
-        }
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+@app.post("/api/reset")
+def api_reset() -> Dict[str, Any]:
+    global engine
+    engine = SimulationEngine()
+    return {"status": "reset", "state": engine.get_state()}
+
+
+# Backward-compatible aliases
+@app.get("/simulation/state")
+def simulation_state() -> Dict[str, Any]:
+    return api_state()
+
+
+@app.post("/simulation/tick")
+def simulation_tick(request: Optional[TickRequest] = None) -> Dict[str, Any]:
+    return api_tick(request)
+
+
+@app.post("/simulation/chat")
+def simulation_chat(request: ChatRequest) -> Dict[str, Any]:
+    return api_chat(request)
 
 
 @app.post("/simulation/reset")
 def simulation_reset() -> Dict[str, Any]:
-    global engine
-    engine = SimulationEngine()
-    return {
-        "status": "reset",
-        "state": engine.get_state(),
-    }
+    return api_reset()

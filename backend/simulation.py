@@ -1,35 +1,12 @@
-"""Simulation-centered backend engine.
-
-Implements explicit world/agent data structures and a deterministic cognition
-pipeline:
-
-perception -> interpretation -> emotional/physical update -> goal scoring/
-selection -> plan/action selection -> execution -> memory update -> grounded
-response generation.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from math import atan2, cos, pi, sin, sqrt
+import importlib
 from typing import Any, Dict, List, Optional, Tuple
 
 
-# ==============================
-# Data structures
-# ==============================
-
-
-@dataclass
-class Event:
-    id: str
-    timestamp: float
-    tick: int
-    event_type: str
-    source_agent_id: Optional[str]
-    target_id: Optional[str]
-    content: str
-    position: Tuple[float, float]
+Vector2 = Tuple[float, float]
 
 
 @dataclass
@@ -37,23 +14,35 @@ class WorldObject:
     id: str
     name: str
     kind: str
-    position: Tuple[float, float]
-    interactable: bool = True
-    properties: Dict[str, Any] = field(default_factory=dict)
+    position: Vector2
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class Obstacle:
     id: str
     kind: str
-    position: Tuple[float, float]
+    position: Vector2
     radius: float
 
 
 @dataclass
-class MemoryItem:
-    timestamp: float
+class SimulationEvent:
+    id: str
     tick: int
+    time: float
+    event_type: str
+    source_agent_id: Optional[str]
+    target_id: Optional[str]
+    position: Vector2
+    content: str
+
+
+@dataclass
+class MemoryEvent:
+    id: str
+    tick: int
+    time: float
     category: str
     content: str
     confidence: float
@@ -61,88 +50,74 @@ class MemoryItem:
 
 
 @dataclass
-class EmotionDimension:
-    intensity: float
-    decay_per_tick: float
-
-
-@dataclass
 class EmotionalState:
-    dimensions: Dict[str, EmotionDimension] = field(default_factory=dict)
+    calm: float = 0.55
+    engagement: float = 0.45
+    anxiety: float = 0.20
+    curiosity: float = 0.55
+    fatigue_feel: float = 0.20
 
 
 @dataclass
 class PhysicalState:
-    energy: float = 0.8
-    stamina: float = 0.8
-    hunger: float = 0.2
-    stress_load: float = 0.2
-
-
-@dataclass
-class RelationshipState:
-    trust: float = 0.5
-    familiarity: float = 0.2
-    affinity: float = 0.5
+    energy: float = 0.85
+    stamina: float = 0.85
+    hunger: float = 0.20
+    stress: float = 0.20
 
 
 @dataclass
 class GoalState:
     name: str
-    score: float
-    urgency: float
+    priority: float
     reason: str
 
 
 @dataclass
+class PlanState:
+    steps: List[str] = field(default_factory=list)
+    cursor: int = 0
+
+
+@dataclass
 class ActionState:
-    kind: str = "idle"  # idle | walk | orient | interact | speak | rest
-    status: str = "idle"  # idle | in_progress | completed
+    name: str = "idle"
+    status: str = "idle"
     target_id: Optional[str] = None
-    target_position: Optional[Tuple[float, float]] = None
-    elapsed: float = 0.0
+    target_position: Optional[Vector2] = None
     duration: float = 0.0
+    elapsed: float = 0.0
+
+
+@dataclass
+class PerceptionResult:
+    visible_objects: List[Dict[str, Any]]
+    visible_agents: List[Dict[str, Any]]
+    nearby_agents: List[Dict[str, Any]]
+    recent_events: List[Dict[str, Any]]
+    user_messages: List[str]
+    remembered: List[Dict[str, Any]]
 
 
 @dataclass
 class AgentState:
     id: str
     name: str
-    position: Tuple[float, float]
-    facing_radians: float
-    vision_range: float = 6.0
-    fov_radians: float = pi * 0.9
-    memory: List[MemoryItem] = field(default_factory=list)
-    action_history: List[Dict[str, Any]] = field(default_factory=list)
-    relationships: Dict[str, RelationshipState] = field(default_factory=dict)
+    position: Vector2
+    facing_radians: float = 0.0
+    walk_speed: float = 1.2
+    vision_range: float = 7.0
+    fov_radians: float = pi * 0.95
     emotional_state: EmotionalState = field(default_factory=EmotionalState)
     physical_state: PhysicalState = field(default_factory=PhysicalState)
-    goals: List[GoalState] = field(default_factory=list)
-    current_goal: Optional[GoalState] = None
-    current_plan: List[str] = field(default_factory=list)
+    memory: List[MemoryEvent] = field(default_factory=list)
+    pending_user_messages: List[str] = field(default_factory=list)
+    current_goal: GoalState = field(default_factory=lambda: GoalState(name="idle", priority=0.1, reason="startup"))
+    current_plan: PlanState = field(default_factory=PlanState)
     current_action: ActionState = field(default_factory=ActionState)
-    pending_user_chat: List[str] = field(default_factory=list)
+    last_perception: Optional[PerceptionResult] = None
+    last_interpretation: Dict[str, Any] = field(default_factory=dict)
     last_response: str = ""
-
-
-@dataclass
-class Perception:
-    agent_id: str
-    nearby_visible_objects: List[Dict[str, Any]]
-    nearby_visible_agents: List[Dict[str, Any]]
-    observed_events: List[Dict[str, Any]]
-    user_chat_input: List[str]
-    remembered_facts: List[Dict[str, Any]]
-
-
-@dataclass
-class Interpretation:
-    salient_objects: List[Dict[str, Any]]
-    social_signals: List[str]
-    inferred_needs: List[str]
-    threat_level: float
-    user_intent: Optional[str]
-    summary: str
 
 
 @dataclass
@@ -151,664 +126,756 @@ class WorldState:
     tick: int
     agents: Dict[str, AgentState]
     objects: Dict[str, WorldObject]
-    obstacles: List[Obstacle]
-    events: List[Event]
+    obstacles: List[Obstacle] = field(default_factory=list)
+    recent_events: List[SimulationEvent] = field(default_factory=list)
+    nearby_agents: Dict[str, List[str]] = field(default_factory=dict)
 
 
-# ==============================
-# Helper / pure logic
-# ==============================
+class BehaviorAdapter:
+    """Safe adapter to optional external behavior module.
 
+    If an external module is importable, this adapter attempts to call a known
+    behavior function. Otherwise it provides deterministic local outputs.
+    """
 
-def clamp(value: float, low: float, high: float) -> float:
-    return max(low, min(high, value))
+    def __init__(self) -> None:
+        self.module = None
+        self.engine = None
+        for module_name in ("rpmodule", "rpbot_rpmodule", "RPBOT_rpmodule"):
+            try:
+                self.module = importlib.import_module(module_name)
+                break
+            except Exception:
+                continue
 
+        if self.module is not None:
+            for class_name in ("BehaviorEngine", "DecisionEngine", "Engine"):
+                cls = getattr(self.module, class_name, None)
+                if cls is not None:
+                    try:
+                        self.engine = cls()
+                        break
+                    except Exception:
+                        self.engine = None
 
-def distance(a: Tuple[float, float], b: Tuple[float, float]) -> float:
-    return sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
-
-
-def angle_to(a: Tuple[float, float], b: Tuple[float, float]) -> float:
-    return atan2(b[1] - a[1], b[0] - a[0])
-
-
-def normalize_angle(value: float) -> float:
-    while value > pi:
-        value -= 2 * pi
-    while value < -pi:
-        value += 2 * pi
-    return value
-
-
-def emotion_value(agent: AgentState, key: str) -> float:
-    dimension = agent.emotional_state.dimensions.get(key)
-    return dimension.intensity if dimension else 0.0
-
-
-def add_emotion(agent: AgentState, key: str, delta: float, decay: float = 0.04) -> None:
-    dimension = agent.emotional_state.dimensions.get(key)
-    if dimension is None:
-        dimension = EmotionDimension(intensity=0.0, decay_per_tick=decay)
-        agent.emotional_state.dimensions[key] = dimension
-    dimension.intensity = clamp(dimension.intensity + delta, 0.0, 1.0)
-
-
-def decay_emotions(agent: AgentState, dt: float) -> None:
-    for dimension in agent.emotional_state.dimensions.values():
-        dimension.intensity = clamp(dimension.intensity - dimension.decay_per_tick * dt, 0.0, 1.0)
-
-
-def is_visible(agent: AgentState, target_position: Tuple[float, float]) -> bool:
-    if distance(agent.position, target_position) > agent.vision_range:
-        return False
-    relative_angle = normalize_angle(angle_to(agent.position, target_position) - agent.facing_radians)
-    return abs(relative_angle) <= (agent.fov_radians / 2)
-
-
-def _remembered_facts(agent: AgentState, limit: int = 6) -> List[Dict[str, Any]]:
-    return [
-        {
-            "category": m.category,
-            "content": m.content,
-            "confidence": m.confidence,
-            "related_ids": m.related_ids,
-            "tick": m.tick,
+    def evaluate(
+        self,
+        agent: AgentState,
+        perception: PerceptionResult,
+        interpretation: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        payload = {
+            "agent": {
+                "id": agent.id,
+                "position": agent.position,
+                "emotion": vars(agent.emotional_state),
+                "physical": vars(agent.physical_state),
+            },
+            "perception": {
+                "objects": perception.visible_objects,
+                "agents": perception.visible_agents,
+                "events": perception.recent_events,
+                "user_messages": perception.user_messages,
+            },
+            "interpretation": interpretation,
         }
-        for m in agent.memory[-limit:]
-    ]
 
+        try:
+            if self.engine is not None and hasattr(self.engine, "evaluate"):
+                result = self.engine.evaluate(payload)  # type: ignore[attr-defined]
+                if isinstance(result, dict):
+                    return result
+            if self.module is not None and hasattr(self.module, "evaluate"):
+                result = self.module.evaluate(payload)  # type: ignore[attr-defined]
+                if isinstance(result, dict):
+                    return result
+            if self.module is not None and hasattr(self.module, "decide"):
+                result = self.module.decide(payload)  # type: ignore[attr-defined]
+                if isinstance(result, dict):
+                    return result
+        except Exception:
+            pass
 
-def build_perception(world: WorldState, agent: AgentState) -> Perception:
-    """Only exposes what the agent can perceive locally + memory + user input."""
-    objects = [
-        {
-            "id": obj.id,
-            "name": obj.name,
-            "kind": obj.kind,
-            "position": obj.position,
-            "distance": round(distance(agent.position, obj.position), 2),
+        urgency = 0.0
+        urgency += 0.55 if interpretation.get("user_intent") else 0.0
+        urgency += max(0.0, 0.4 - agent.physical_state.energy)
+        urgency += max(0.0, agent.physical_state.hunger - 0.6)
+
+        return {
+            "emotion_delta": {
+                "engagement": 0.08 if interpretation.get("user_intent") else 0.0,
+                "anxiety": 0.08 if interpretation.get("threat_level", 0.0) > 0.45 else 0.0,
+                "curiosity": 0.05 if perception.visible_objects else 0.0,
+            },
+            "physical_delta": {
+                "stress": 0.05 if interpretation.get("threat_level", 0.0) > 0.45 else -0.01,
+            },
+            "goal_bias": {
+                "respond_user": urgency,
+                "rest": max(0.0, 0.45 - agent.physical_state.energy),
+            },
         }
-        for obj in world.objects.values()
-        if is_visible(agent, obj.position)
-    ]
-
-    agents = [
-        {
-            "id": other.id,
-            "name": other.name,
-            "position": other.position,
-            "distance": round(distance(agent.position, other.position), 2),
-        }
-        for other in world.agents.values()
-        if other.id != agent.id and is_visible(agent, other.position)
-    ]
-
-    events = [
-        {
-            "id": e.id,
-            "event_type": e.event_type,
-            "content": e.content,
-            "tick": e.tick,
-            "source_agent_id": e.source_agent_id,
-        }
-        for e in world.events[-20:]
-        if distance(agent.position, e.position) <= agent.vision_range + 2.0
-    ]
-
-    return Perception(
-        agent_id=agent.id,
-        nearby_visible_objects=objects,
-        nearby_visible_agents=agents,
-        observed_events=events,
-        user_chat_input=list(agent.pending_user_chat),
-        remembered_facts=_remembered_facts(agent),
-    )
-
-
-def interpret_perception(perception: Perception, agent: AgentState) -> Interpretation:
-    salient_objects = sorted(
-        perception.nearby_visible_objects,
-        key=lambda item: item.get("distance", 999),
-    )[:3]
-
-    social_signals: List[str] = []
-    if perception.user_chat_input:
-        social_signals.append("user_engaged")
-    if perception.nearby_visible_agents:
-        social_signals.append("others_nearby")
-
-    inferred_needs: List[str] = []
-    if agent.physical_state.energy < 0.35:
-        inferred_needs.append("rest")
-    if agent.physical_state.hunger > 0.65:
-        inferred_needs.append("food")
-    if emotion_value(agent, "anxiety") > 0.6:
-        inferred_needs.append("safety")
-
-    threat_level = 0.0
-    if any("blocked" in e["content"] for e in perception.observed_events):
-        threat_level += 0.3
-    threat_level += emotion_value(agent, "anxiety") * 0.25
-    threat_level = clamp(threat_level, 0.0, 1.0)
-
-    user_intent: Optional[str] = None
-    if perception.user_chat_input:
-        latest = perception.user_chat_input[-1].lower()
-        if "help" in latest:
-            user_intent = "request_help"
-        elif "where" in latest:
-            user_intent = "request_location"
-        elif "hi" in latest or "hello" in latest:
-            user_intent = "greeting"
-        else:
-            user_intent = "general_chat"
-
-    return Interpretation(
-        salient_objects=salient_objects,
-        social_signals=social_signals,
-        inferred_needs=inferred_needs,
-        threat_level=threat_level,
-        user_intent=user_intent,
-        summary=(
-            f"objects={len(perception.nearby_visible_objects)} "
-            f"agents={len(perception.nearby_visible_agents)} "
-            f"user_msgs={len(perception.user_chat_input)}"
-        ),
-    )
-
-
-def update_emotional_and_physical(agent: AgentState, interpretation: Interpretation, dt: float) -> None:
-    """Emotion system with intensity + decay + physical factors."""
-    decay_emotions(agent, dt)
-
-    p = agent.physical_state
-    p.hunger = clamp(p.hunger + 0.01 * dt, 0.0, 1.0)
-    p.energy = clamp(p.energy - 0.015 * dt, 0.0, 1.0)
-    p.stamina = clamp(p.stamina - 0.01 * dt, 0.0, 1.0)
-
-    if agent.current_action.kind == "rest":
-        p.energy = clamp(p.energy + 0.035 * dt, 0.0, 1.0)
-        p.stamina = clamp(p.stamina + 0.03 * dt, 0.0, 1.0)
-
-    if interpretation.user_intent is not None:
-        add_emotion(agent, "engagement", 0.12)
-    if interpretation.threat_level > 0.4:
-        add_emotion(agent, "anxiety", 0.10)
-    if p.energy < 0.3:
-        add_emotion(agent, "fatigue", 0.14)
-    if p.hunger > 0.7:
-        add_emotion(agent, "irritation", 0.08)
-
-    p.stress_load = clamp(
-        p.stress_load + emotion_value(agent, "anxiety") * 0.02 - emotion_value(agent, "engagement") * 0.01,
-        0.0,
-        1.0,
-    )
-
-
-def score_goals(agent: AgentState, perception: Perception, interpretation: Interpretation) -> List[GoalState]:
-    energy = agent.physical_state.energy
-    engagement = emotion_value(agent, "engagement")
-    anxiety = emotion_value(agent, "anxiety")
-    fatigue = emotion_value(agent, "fatigue")
-
-    goals = [
-        GoalState(
-            name="respond_to_user",
-            score=clamp(0.2 + (0.6 if perception.user_chat_input else 0.0) + engagement * 0.2, 0.0, 1.0),
-            urgency=0.8 if perception.user_chat_input else 0.3,
-            reason="User chat pending" if perception.user_chat_input else "Maintain social presence",
-        ),
-        GoalState(
-            name="rest",
-            score=clamp((1.0 - energy) * 0.55 + fatigue * 0.35 + anxiety * 0.1, 0.0, 1.0),
-            urgency=clamp((1.0 - energy) + fatigue * 0.4, 0.0, 1.0),
-            reason="Recover energy",
-        ),
-        GoalState(
-            name="inspect_nearby_object",
-            score=clamp(0.2 + (0.35 if interpretation.salient_objects else 0.0), 0.0, 1.0),
-            urgency=0.45,
-            reason="Interesting nearby object",
-        ),
-        GoalState(
-            name="socialize_with_agent",
-            score=clamp(0.15 + (0.35 if perception.nearby_visible_agents else 0.0) + engagement * 0.2, 0.0, 1.0),
-            urgency=0.5,
-            reason="Nearby social opportunity",
-        ),
-        GoalState(
-            name="explore",
-            score=0.3,
-            urgency=0.35,
-            reason="Maintain world awareness",
-        ),
-    ]
-    return sorted(goals, key=lambda g: g.score + 0.4 * g.urgency, reverse=True)
-
-
-def select_plan_and_action(agent: AgentState, perception: Perception, interpretation: Interpretation) -> ActionState:
-    if agent.current_action.status == "in_progress":
-        return agent.current_action
-
-    goal = agent.current_goal.name if agent.current_goal else "explore"
-
-    if goal == "respond_to_user" and perception.user_chat_input:
-        agent.current_plan = ["attend_user", "speak"]
-        return ActionState(kind="speak", status="in_progress", duration=1.0)
-
-    if goal == "rest":
-        rest_spot = next((o for o in perception.nearby_visible_objects if o["kind"] in {"bench", "station"}), None)
-        if rest_spot and rest_spot["distance"] > 1.1:
-            agent.current_plan = ["walk_to_rest", "rest"]
-            return ActionState(
-                kind="walk",
-                status="in_progress",
-                target_id=rest_spot["id"],
-                target_position=tuple(rest_spot["position"]),
-            )
-        if rest_spot:
-            agent.current_plan = ["rest"]
-            return ActionState(kind="rest", status="in_progress", target_id=rest_spot["id"], duration=2.0)
-
-    if goal == "inspect_nearby_object" and interpretation.salient_objects:
-        target = interpretation.salient_objects[0]
-        if target["distance"] > 1.4:
-            agent.current_plan = ["walk_to_object", "orient", "interact"]
-            return ActionState(
-                kind="walk",
-                status="in_progress",
-                target_id=target["id"],
-                target_position=tuple(target["position"]),
-            )
-        agent.current_plan = ["orient", "interact"]
-        return ActionState(kind="orient", status="in_progress", target_position=tuple(target["position"]), duration=1.0)
-
-    if goal == "socialize_with_agent" and perception.nearby_visible_agents:
-        target_agent = perception.nearby_visible_agents[0]
-        if target_agent["distance"] > 1.5:
-            agent.current_plan = ["approach_agent", "greet"]
-            return ActionState(
-                kind="walk",
-                status="in_progress",
-                target_id=target_agent["id"],
-                target_position=tuple(target_agent["position"]),
-            )
-        agent.current_plan = ["greet"]
-        return ActionState(kind="speak", status="in_progress", target_id=target_agent["id"], duration=1.0)
-
-    waypoint = (
-        agent.position[0] + cos(agent.facing_radians) * 2.0,
-        agent.position[1] + sin(agent.facing_radians) * 2.0,
-    )
-    agent.current_plan = ["explore_forward"]
-    return ActionState(kind="walk", status="in_progress", target_position=waypoint)
-
-
-def execute_action(world: WorldState, agent: AgentState, dt: float) -> List[Event]:
-    """Actions progress over ticks (walk/orient/interact)."""
-    emitted: List[Event] = []
-    action = agent.current_action
-
-    if action.kind == "walk" and action.target_position:
-        desired_heading = angle_to(agent.position, action.target_position)
-        heading_diff = normalize_angle(desired_heading - agent.facing_radians)
-        max_turn = 1.0 * dt
-        agent.facing_radians = normalize_angle(agent.facing_radians + clamp(heading_diff, -max_turn, max_turn))
-
-        speed = 1.1 * (0.5 + agent.physical_state.stamina * 0.8)
-        step = speed * dt
-        remaining = distance(agent.position, action.target_position)
-
-        if remaining <= step:
-            agent.position = action.target_position
-            action.status = "completed"
-        else:
-            agent.position = (
-                agent.position[0] + cos(agent.facing_radians) * step,
-                agent.position[1] + sin(agent.facing_radians) * step,
-            )
-            action.status = "in_progress"
-
-    elif action.kind == "orient" and action.target_position:
-        desired_heading = angle_to(agent.position, action.target_position)
-        heading_diff = normalize_angle(desired_heading - agent.facing_radians)
-        max_turn = 1.2 * dt
-        agent.facing_radians = normalize_angle(agent.facing_radians + clamp(heading_diff, -max_turn, max_turn))
-        if abs(heading_diff) < 0.12:
-            action.status = "completed"
-
-    elif action.kind in {"rest", "interact", "speak"}:
-        action.elapsed += dt
-        if action.elapsed >= max(0.5, action.duration):
-            action.status = "completed"
-
-    if action.status == "completed":
-        emitted.append(
-            Event(
-                id=f"evt-{world.tick}-{agent.id}-{len(world.events)}",
-                timestamp=world.time,
-                tick=world.tick,
-                event_type="action_completed",
-                source_agent_id=agent.id,
-                target_id=action.target_id,
-                content=f"{agent.name} completed {action.kind}",
-                position=agent.position,
-            )
-        )
-        agent.action_history.append(
-            {
-                "tick": world.tick,
-                "action": action.kind,
-                "target_id": action.target_id,
-                "target_position": action.target_position,
-            }
-        )
-        agent.current_action = ActionState()
-
-    return emitted
-
-
-def update_memory(world: WorldState, agent: AgentState, perception: Perception, interpretation: Interpretation) -> None:
-    for observed in perception.observed_events[-2:]:
-        agent.memory.append(
-            MemoryItem(
-                timestamp=world.time,
-                tick=world.tick,
-                category="observation",
-                content=observed["content"],
-                confidence=0.7,
-                related_ids=[x for x in [observed.get("source_agent_id")] if x],
-            )
-        )
-
-    for msg in perception.user_chat_input[-2:]:
-        agent.memory.append(
-            MemoryItem(
-                timestamp=world.time,
-                tick=world.tick,
-                category="user_chat",
-                content=msg,
-                confidence=0.95,
-            )
-        )
-
-    agent.memory.append(
-        MemoryItem(
-            timestamp=world.time,
-            tick=world.tick,
-            category="interpretation",
-            content=interpretation.summary,
-            confidence=0.6,
-        )
-    )
-
-    if len(agent.memory) > 200:
-        agent.memory = agent.memory[-200:]
-
-
-def social_tone(agent: AgentState) -> str:
-    fatigue = emotion_value(agent, "fatigue")
-    anxiety = emotion_value(agent, "anxiety")
-    engagement = emotion_value(agent, "engagement")
-
-    if fatigue > 0.65:
-        return "tired but cooperative"
-    if anxiety > 0.6:
-        return "cautious"
-    if engagement > 0.55:
-        return "warm"
-    return "neutral"
-
-
-def generate_grounded_response(agent: AgentState, perception: Perception) -> str:
-    tone = social_tone(agent)
-    goal = agent.current_goal.name if agent.current_goal else "explore"
-    action = agent.current_action.kind
-    visible = ", ".join(o["name"] for o in perception.nearby_visible_objects[:2]) or "nothing notable nearby"
-    remembered = perception.remembered_facts[-1]["content"] if perception.remembered_facts else "no strong memory"
-
-    if perception.user_chat_input:
-        return (
-            f"({tone}) You said '{perception.user_chat_input[-1]}'. I can see {visible}. "
-            f"Energy={agent.physical_state.energy:.2f}, stress={agent.physical_state.stress_load:.2f}. "
-            f"Goal={goal}, action={action}. Memory hint: {remembered}."
-        )
-
-    return f"({tone}) I observe {visible}. Goal={goal}, action={action}."
-
-
-# ==============================
-# Engine
-# ==============================
 
 
 class SimulationEngine:
     def __init__(self) -> None:
-        self.world = self._create_world()
+        self._event_counter = 0
+        self._memory_counter = 0
+        self.behavior_adapter = BehaviorAdapter()
+        self.world = self._create_initial_world()
 
-    def _create_world(self) -> WorldState:
-        # Demo starts with one primary agent but model is multi-agent first-class.
-        rico = AgentState(id="agent-1", name="Rico", position=(0.0, 0.0), facing_radians=0.0)
-        rico.emotional_state.dimensions = {
-            "engagement": EmotionDimension(0.4, 0.03),
-            "anxiety": EmotionDimension(0.1, 0.05),
-            "fatigue": EmotionDimension(0.2, 0.02),
-            "irritation": EmotionDimension(0.05, 0.06),
-        }
-
-        # Additional agent to keep multi-agent behavior explicit.
-        nova = AgentState(id="agent-2", name="Nova", position=(4.0, 1.5), facing_radians=pi)
-        nova.emotional_state.dimensions = {
-            "engagement": EmotionDimension(0.3, 0.03),
-            "anxiety": EmotionDimension(0.1, 0.05),
-            "fatigue": EmotionDimension(0.1, 0.02),
-        }
-
+    def _create_initial_world(self) -> WorldState:
+        demo_agent = AgentState(id="agent-1", name="Rico", position=(0.0, 0.0))
         objects = {
-            "obj-1": WorldObject(id="obj-1", name="Info Kiosk", kind="kiosk", position=(3.0, 0.0)),
-            "obj-2": WorldObject(id="obj-2", name="Charging Bench", kind="bench", position=(-2.0, -1.0)),
-            "obj-3": WorldObject(id="obj-3", name="Snack Station", kind="station", position=(1.0, 3.0)),
+            "obj-tree": WorldObject(
+                id="obj-tree",
+                name="Oak Tree",
+                kind="landmark",
+                position=(4.5, 2.0),
+                metadata={"description": "A large old oak.", "interactable": False},
+            ),
+            "obj-water": WorldObject(
+                id="obj-water",
+                name="Water Pump",
+                kind="resource",
+                position=(-3.0, 1.5),
+                metadata={"description": "Potable water source.", "interactable": True},
+            ),
+            "obj-food": WorldObject(
+                id="obj-food",
+                name="Supply Crate",
+                kind="resource",
+                position=(2.5, -4.0),
+                metadata={"description": "Contains emergency rations.", "interactable": True, "food": True},
+            ),
         }
-
+        obstacles = [
+            Obstacle(id="obs-rock", kind="rock", position=(1.2, 0.9), radius=0.7),
+        ]
         return WorldState(
             time=0.0,
             tick=0,
-            agents={rico.id: rico, nova.id: nova},
+            agents={demo_agent.id: demo_agent},
             objects=objects,
-            obstacles=[Obstacle(id="obs-1", kind="pillar", position=(1.5, 1.2), radius=0.4)],
-            events=[],
+            obstacles=obstacles,
+            nearby_agents={demo_agent.id: []},
+            recent_events=[],
         )
 
     def queue_user_chat(self, agent_id: str, message: str) -> None:
         agent = self.world.agents.get(agent_id)
         if agent is None:
-            raise ValueError(f"Unknown agent_id '{agent_id}'")
-        agent.pending_user_chat.append(message)
+            raise ValueError(f"Agent '{agent_id}' not found")
+        cleaned = message.strip()
+        if not cleaned:
+            return
+        agent.pending_user_messages.append(cleaned)
+        self._record_event(
+            event_type="user_message",
+            source_agent_id=None,
+            target_id=agent_id,
+            position=agent.position,
+            content=cleaned,
+        )
 
     def tick(self, dt: float = 1.0, steps: int = 1) -> Dict[str, Any]:
-        dt = clamp(dt, 0.1, 5.0)
-        steps = max(1, min(steps, 50))
-
-        all_responses: List[Dict[str, str]] = []
-        all_events_added: List[Event] = []
+        dt = max(0.05, min(dt, 5.0))
+        steps = max(1, min(steps, 120))
+        step_summaries: List[Dict[str, Any]] = []
 
         for _ in range(steps):
             self.world.tick += 1
             self.world.time += dt
+            self._refresh_nearby_agents()
 
-            step_events: List[Event] = []
+            for agent_id, agent in self.world.agents.items():
+                perception = self._perceive(agent)
+                interpretation = self._interpret(agent, perception)
+                self._update_emotional_physical(agent, perception, interpretation, dt)
+                goal = self._select_goal(agent, perception, interpretation)
+                plan = self._plan(agent, goal, perception)
+                action_summary = self._act(agent, dt)
+                response = self._respond(agent, perception, interpretation)
+                self._update_memory(agent, perception, interpretation, action_summary, response)
 
-            for agent in self.world.agents.values():
-                # 1) perception
-                perception = build_perception(self.world, agent)
-
-                # 2) interpretation
-                interpretation = interpret_perception(perception, agent)
-
-                # 3) emotional/physical update
-                update_emotional_and_physical(agent, interpretation, dt)
-
-                # 4) goal scoring and selection
-                agent.goals = score_goals(agent, perception, interpretation)
-                agent.current_goal = agent.goals[0]
-
-                # 5) plan/action selection
-                agent.current_action = select_plan_and_action(agent, perception, interpretation)
-
-                # 6) action execution with spatial/time progression
-                step_events.extend(execute_action(self.world, agent, dt))
-
-                # 7) memory update
-                update_memory(self.world, agent, perception, interpretation)
-
-                # 8) grounded response generation
-                agent.last_response = generate_grounded_response(agent, perception)
-                all_responses.append({"agent_id": agent.id, "response": agent.last_response})
-
-                # consume chat after processing this tick
-                agent.pending_user_chat = []
-
-            self.world.events.extend(step_events)
-            all_events_added.extend(step_events)
-
-            if len(self.world.events) > 500:
-                self.world.events = self.world.events[-500:]
+                step_summaries.append(
+                    {
+                        "tick": self.world.tick,
+                        "agent_id": agent_id,
+                        "goal": vars(goal),
+                        "action": vars(agent.current_action),
+                        "response": response,
+                    }
+                )
 
         return {
-            "time": self.world.time,
+            "status": "ok",
             "tick": self.world.tick,
-            "responses": all_responses,
-            "events_added": [self._event_dict(e) for e in all_events_added],
+            "time": round(self.world.time, 2),
+            "steps": steps,
+            "updates": step_summaries,
             "state": self.get_state(),
         }
 
     def grounded_chat(self, agent_id: str, message: str, auto_tick: bool = True) -> Dict[str, Any]:
         self.queue_user_chat(agent_id, message)
         if auto_tick:
-            tick_result = self.tick(dt=1.0, steps=1)
-            agent = self.world.agents[agent_id]
-            return {
-                "agent_id": agent_id,
-                "message": message,
-                "response": agent.last_response,
-                "goal": agent.current_goal.name if agent.current_goal else "explore",
-                "action": agent.current_action.kind,
-                "tick": self.world.tick,
-                "time": self.world.time,
-                "tick_result": tick_result,
-            }
+            self.tick(dt=1.0, steps=1)
+
+        agent = self.world.agents.get(agent_id)
+        if agent is None:
+            raise ValueError(f"Agent '{agent_id}' not found")
 
         return {
             "agent_id": agent_id,
             "message": message,
-            "status": "queued",
             "tick": self.world.tick,
-            "time": self.world.time,
+            "time": round(self.world.time, 2),
+            "response": agent.last_response,
+            "active_goal": vars(agent.current_goal),
+            "active_action": vars(agent.current_action),
+            "emotion": vars(agent.emotional_state),
+            "physical": vars(agent.physical_state),
+            "perception": self._serialize_perception(agent.last_perception),
         }
 
     def get_state(self) -> Dict[str, Any]:
+        world = self.world
         return {
-            "time": self.world.time,
-            "tick": self.world.tick,
-            "agents": {k: self._agent_dict(v) for k, v in self.world.agents.items()},
-            "objects": {k: self._object_dict(v) for k, v in self.world.objects.items()},
-            "obstacles": [self._obstacle_dict(o) for o in self.world.obstacles],
-            "events": [self._event_dict(e) for e in self.world.events[-100:]],
+            "time": round(world.time, 2),
+            "tick": world.tick,
+            "nearby_agents": world.nearby_agents,
+            "objects": {
+                obj_id: {
+                    "id": obj.id,
+                    "name": obj.name,
+                    "kind": obj.kind,
+                    "position": [round(obj.position[0], 2), round(obj.position[1], 2)],
+                    "metadata": obj.metadata,
+                }
+                for obj_id, obj in world.objects.items()
+            },
+            "obstacles": [
+                {
+                    "id": obstacle.id,
+                    "kind": obstacle.kind,
+                    "position": [round(obstacle.position[0], 2), round(obstacle.position[1], 2)],
+                    "radius": obstacle.radius,
+                }
+                for obstacle in world.obstacles
+            ],
+            "recent_events": [self._serialize_event(e) for e in world.recent_events[-25:]],
+            "agents": {
+                agent_id: self._serialize_agent(agent)
+                for agent_id, agent in world.agents.items()
+            },
         }
 
-    @staticmethod
-    def _event_dict(event: Event) -> Dict[str, Any]:
-        return {
-            "id": event.id,
-            "timestamp": event.timestamp,
-            "tick": event.tick,
-            "event_type": event.event_type,
-            "source_agent_id": event.source_agent_id,
-            "target_id": event.target_id,
-            "content": event.content,
-            "position": list(event.position),
+    def _perceive(self, agent: AgentState) -> PerceptionResult:
+        visible_objects: List[Dict[str, Any]] = []
+        for obj in self.world.objects.values():
+            if self._is_visible(agent, obj.position):
+                visible_objects.append(
+                    {
+                        "id": obj.id,
+                        "name": obj.name,
+                        "kind": obj.kind,
+                        "position": [round(obj.position[0], 2), round(obj.position[1], 2)],
+                        "distance": round(self._distance(agent.position, obj.position), 2),
+                        "metadata": obj.metadata,
+                    }
+                )
+
+        visible_agents: List[Dict[str, Any]] = []
+        nearby_agents: List[Dict[str, Any]] = []
+        for other in self.world.agents.values():
+            if other.id == agent.id:
+                continue
+            d = self._distance(agent.position, other.position)
+            if d <= 8.0:
+                nearby_agents.append({"id": other.id, "name": other.name, "distance": round(d, 2)})
+            if self._is_visible(agent, other.position):
+                visible_agents.append(
+                    {
+                        "id": other.id,
+                        "name": other.name,
+                        "position": [round(other.position[0], 2), round(other.position[1], 2)],
+                        "distance": round(d, 2),
+                    }
+                )
+
+        recent_events = [
+            self._serialize_event(event)
+            for event in self.world.recent_events[-15:]
+            if self._distance(agent.position, event.position) <= 9.0
+        ]
+
+        remembered = [
+            {
+                "id": memory.id,
+                "tick": memory.tick,
+                "category": memory.category,
+                "content": memory.content,
+                "confidence": memory.confidence,
+            }
+            for memory in agent.memory[-8:]
+        ]
+
+        perception = PerceptionResult(
+            visible_objects=visible_objects,
+            visible_agents=visible_agents,
+            nearby_agents=nearby_agents,
+            recent_events=recent_events,
+            user_messages=list(agent.pending_user_messages),
+            remembered=remembered,
+        )
+        agent.last_perception = perception
+        return perception
+
+    def _interpret(self, agent: AgentState, perception: PerceptionResult) -> Dict[str, Any]:
+        user_intent: Optional[str] = None
+        if perception.user_messages:
+            text = perception.user_messages[-1].lower()
+            if "where" in text or "location" in text:
+                user_intent = "location"
+            elif "help" in text:
+                user_intent = "help"
+            elif "status" in text:
+                user_intent = "status"
+            else:
+                user_intent = "chat"
+
+        threat_level = 0.0
+        for event in perception.recent_events:
+            if "blocked" in event["content"].lower() or "danger" in event["content"].lower():
+                threat_level += 0.25
+        threat_level = min(1.0, threat_level + agent.physical_state.stress * 0.2)
+
+        needs: List[str] = []
+        if agent.physical_state.energy < 0.4:
+            needs.append("rest")
+        if agent.physical_state.hunger > 0.65:
+            needs.append("food")
+        if threat_level > 0.5:
+            needs.append("safety")
+
+        interpretation = {
+            "user_intent": user_intent,
+            "threat_level": round(threat_level, 2),
+            "needs": needs,
+            "context_summary": f"objects={len(perception.visible_objects)}, nearby_agents={len(perception.nearby_agents)}, user_msgs={len(perception.user_messages)}",
+        }
+        agent.last_interpretation = interpretation
+        return interpretation
+
+    def _update_emotional_physical(
+        self,
+        agent: AgentState,
+        perception: PerceptionResult,
+        interpretation: Dict[str, Any],
+        dt: float,
+    ) -> None:
+        e = agent.emotional_state
+        p = agent.physical_state
+
+        p.hunger = self._clamp(p.hunger + 0.012 * dt)
+        p.energy = self._clamp(p.energy - 0.018 * dt)
+        p.stamina = self._clamp(p.stamina - 0.010 * dt)
+
+        e.engagement = self._clamp(e.engagement - 0.012 * dt)
+        e.curiosity = self._clamp(e.curiosity - 0.008 * dt)
+        e.anxiety = self._clamp(e.anxiety - 0.010 * dt)
+        e.fatigue_feel = self._clamp(e.fatigue_feel + 0.015 * dt)
+
+        external = self.behavior_adapter.evaluate(agent, perception, interpretation)
+
+        for key, delta in external.get("emotion_delta", {}).items():
+            if hasattr(e, key):
+                setattr(e, key, self._clamp(getattr(e, key) + float(delta)))
+        for key, delta in external.get("physical_delta", {}).items():
+            if hasattr(p, key):
+                setattr(p, key, self._clamp(getattr(p, key) + float(delta)))
+
+        if interpretation.get("user_intent"):
+            e.engagement = self._clamp(e.engagement + 0.08)
+            e.calm = self._clamp(e.calm + 0.02)
+        if interpretation.get("threat_level", 0) > 0.45:
+            e.anxiety = self._clamp(e.anxiety + 0.09)
+            p.stress = self._clamp(p.stress + 0.05)
+        if agent.current_action.name == "rest" and agent.current_action.status == "in_progress":
+            p.energy = self._clamp(p.energy + 0.05 * dt)
+            p.stamina = self._clamp(p.stamina + 0.045 * dt)
+            e.fatigue_feel = self._clamp(e.fatigue_feel - 0.05 * dt)
+
+        e.fatigue_feel = self._clamp((1.0 - p.energy) * 0.7 + e.fatigue_feel * 0.3)
+
+    def _select_goal(
+        self,
+        agent: AgentState,
+        perception: PerceptionResult,
+        interpretation: Dict[str, Any],
+    ) -> GoalState:
+        scores = {
+            "respond_user": 0.0,
+            "rest": 0.0,
+            "eat": 0.0,
+            "inspect": 0.0,
+            "patrol": 0.1,
         }
 
-    @staticmethod
-    def _object_dict(obj: WorldObject) -> Dict[str, Any]:
+        if perception.user_messages:
+            scores["respond_user"] += 0.95
+        scores["rest"] += max(0.0, 0.7 - agent.physical_state.energy)
+        scores["eat"] += max(0.0, agent.physical_state.hunger - 0.55)
+        scores["inspect"] += 0.25 if perception.visible_objects else 0.0
+        scores["inspect"] += agent.emotional_state.curiosity * 0.2
+
+        for goal_name, bias in self.behavior_adapter.evaluate(agent, perception, interpretation).get("goal_bias", {}).items():
+            if goal_name in scores:
+                scores[goal_name] += float(bias)
+
+        goal_name = max(scores, key=scores.get)
+        reason = f"scores={{{', '.join(f'{k}:{round(v, 2)}' for k, v in scores.items())}}}"
+
+        readable_name = {
+            "respond_user": "Respond to user",
+            "rest": "Recover energy",
+            "eat": "Find food",
+            "inspect": "Inspect environment",
+            "patrol": "Patrol area",
+        }[goal_name]
+
+        goal = GoalState(name=readable_name, priority=round(scores[goal_name], 2), reason=reason)
+        agent.current_goal = goal
+        return goal
+
+    def _plan(self, agent: AgentState, goal: GoalState, perception: PerceptionResult) -> PlanState:
+        steps: List[str]
+        if goal.name == "Respond to user":
+            steps = ["face_user", "speak"]
+        elif goal.name == "Recover energy":
+            steps = ["rest"]
+        elif goal.name == "Find food":
+            food_object = next((obj for obj in perception.visible_objects if obj.get("metadata", {}).get("food")), None)
+            if food_object:
+                steps = [f"move_to:{food_object['id']}", f"interact:{food_object['id']}"]
+            else:
+                steps = ["patrol"]
+        elif goal.name == "Inspect environment" and perception.visible_objects:
+            nearest = sorted(perception.visible_objects, key=lambda obj: obj["distance"])[0]
+            steps = [f"move_to:{nearest['id']}", f"observe:{nearest['id']}"]
+        else:
+            steps = ["patrol"]
+
+        if agent.current_plan.steps != steps or agent.current_plan.cursor >= len(agent.current_plan.steps):
+            agent.current_plan = PlanState(steps=steps, cursor=0)
+        return agent.current_plan
+
+    def _act(self, agent: AgentState, dt: float) -> Dict[str, Any]:
+        if agent.current_action.status != "in_progress":
+            self._start_next_action(agent)
+
+        action = agent.current_action
+        action.elapsed += dt
+
+        if action.name == "move_to" and action.target_position is not None:
+            reached = self._move_toward(agent, action.target_position, dt)
+            if reached:
+                action.status = "completed"
+        elif action.name == "rest":
+            if action.elapsed >= action.duration:
+                action.status = "completed"
+        elif action.name in ("speak", "observe", "interact", "face_user", "patrol"):
+            if action.elapsed >= action.duration:
+                action.status = "completed"
+
+        if action.status == "completed":
+            self._record_event(
+                event_type="action_complete",
+                source_agent_id=agent.id,
+                target_id=action.target_id,
+                position=agent.position,
+                content=f"{agent.name} completed action {action.name}",
+            )
+            agent.current_plan.cursor += 1
+            action.status = "idle"
+            action.name = "idle"
+            action.elapsed = 0.0
+            action.duration = 0.0
+            action.target_id = None
+            action.target_position = None
+
         return {
-            "id": obj.id,
-            "name": obj.name,
-            "kind": obj.kind,
-            "position": list(obj.position),
-            "interactable": obj.interactable,
-            "properties": obj.properties,
+            "action": action.name,
+            "status": action.status,
+            "position": [round(agent.position[0], 2), round(agent.position[1], 2)],
         }
 
-    @staticmethod
-    def _obstacle_dict(obstacle: Obstacle) -> Dict[str, Any]:
-        return {
-            "id": obstacle.id,
-            "kind": obstacle.kind,
-            "position": list(obstacle.position),
-            "radius": obstacle.radius,
-        }
+    def _start_next_action(self, agent: AgentState) -> None:
+        if not agent.current_plan.steps or agent.current_plan.cursor >= len(agent.current_plan.steps):
+            agent.current_action = ActionState()
+            return
 
-    @staticmethod
-    def _agent_dict(agent: AgentState) -> Dict[str, Any]:
+        step = agent.current_plan.steps[agent.current_plan.cursor]
+        action = ActionState(status="in_progress")
+
+        if step.startswith("move_to:"):
+            obj_id = step.split(":", 1)[1]
+            target = self.world.objects.get(obj_id)
+            if target is None:
+                agent.current_plan.cursor += 1
+                return
+            action.name = "move_to"
+            action.target_id = obj_id
+            action.target_position = target.position
+            dist = self._distance(agent.position, target.position)
+            action.duration = max(0.5, dist / max(0.1, agent.walk_speed))
+        elif step.startswith("interact:"):
+            action.name = "interact"
+            action.target_id = step.split(":", 1)[1]
+            action.duration = 1.0
+        elif step.startswith("observe:"):
+            action.name = "observe"
+            action.target_id = step.split(":", 1)[1]
+            action.duration = 0.9
+        elif step == "face_user":
+            action.name = "face_user"
+            action.duration = 0.4
+        elif step == "speak":
+            action.name = "speak"
+            action.duration = 0.8
+            if agent.pending_user_messages:
+                agent.pending_user_messages.clear()
+        elif step == "rest":
+            action.name = "rest"
+            action.duration = 2.2
+        else:
+            action.name = "patrol"
+            patrol_target = self._patrol_target(agent)
+            action.target_position = patrol_target
+            action.duration = 1.5
+
+        agent.current_action = action
+
+    def _respond(self, agent: AgentState, perception: PerceptionResult, interpretation: Dict[str, Any]) -> str:
+        latest = perception.user_messages[-1] if perception.user_messages else ""
+        goal = agent.current_goal.name
+        action = agent.current_action.name
+        p = agent.physical_state
+        e = agent.emotional_state
+
+        nearby = ", ".join(obj["name"] for obj in perception.visible_objects[:3]) or "nothing notable"
+        pos_text = f"({agent.position[0]:.1f}, {agent.position[1]:.1f})"
+
+        lower = latest.lower()
+        if "where" in lower or "location" in lower:
+            response = f"I am at {pos_text}. Nearby I can perceive {nearby}."
+        elif "status" in lower:
+            response = (
+                f"Goal: {goal}. Action: {action}. Energy {p.energy:.2f}, stamina {p.stamina:.2f}, "
+                f"hunger {p.hunger:.2f}, anxiety {e.anxiety:.2f}."
+            )
+        elif "help" in lower:
+            response = f"I can help by sharing context: goal is '{goal}', currently '{action}', and I perceive {nearby}."
+        elif latest:
+            response = (
+                f"Under current context ({interpretation['context_summary']}), I feel engagement {e.engagement:.2f} "
+                f"and fatigue {e.fatigue_feel:.2f}. My focus is '{goal}' while doing '{action}'."
+            )
+        else:
+            response = f"Monitoring world state at {pos_text}; goal '{goal}', action '{action}'."
+
+        agent.last_response = response
+        return response
+
+    def _update_memory(
+        self,
+        agent: AgentState,
+        perception: PerceptionResult,
+        interpretation: Dict[str, Any],
+        action_summary: Dict[str, Any],
+        response: str,
+    ) -> None:
+        snippets = [
+            f"perception: objects={len(perception.visible_objects)} agents={len(perception.visible_agents)}",
+            f"interpretation: intent={interpretation.get('user_intent')} threat={interpretation.get('threat_level')}",
+            f"action: {action_summary['action']} status={action_summary['status']}",
+            f"response: {response}",
+        ]
+
+        for category, content in (
+            ("perception", snippets[0]),
+            ("interpretation", snippets[1]),
+            ("action", snippets[2]),
+            ("response", snippets[3]),
+        ):
+            memory = MemoryEvent(
+                id=self._next_memory_id(),
+                tick=self.world.tick,
+                time=self.world.time,
+                category=category,
+                content=content,
+                confidence=0.75,
+                related_ids=[agent.id],
+            )
+            agent.memory.append(memory)
+
+        if len(agent.memory) > 220:
+            agent.memory = agent.memory[-220:]
+
+    def _refresh_nearby_agents(self) -> None:
+        mapping: Dict[str, List[str]] = {}
+        for agent_id, agent in self.world.agents.items():
+            seen: List[str] = []
+            for other_id, other in self.world.agents.items():
+                if agent_id == other_id:
+                    continue
+                if self._distance(agent.position, other.position) <= 8.0:
+                    seen.append(other_id)
+            mapping[agent_id] = seen
+        self.world.nearby_agents = mapping
+
+    def _move_toward(self, agent: AgentState, target: Vector2, dt: float) -> bool:
+        dx = target[0] - agent.position[0]
+        dy = target[1] - agent.position[1]
+        dist = sqrt(dx * dx + dy * dy)
+        if dist <= 0.05:
+            agent.position = target
+            return True
+
+        direction = atan2(dy, dx)
+        step = agent.walk_speed * dt
+        if step >= dist:
+            agent.position = target
+            agent.facing_radians = direction
+            return True
+
+        agent.position = (
+            agent.position[0] + cos(direction) * step,
+            agent.position[1] + sin(direction) * step,
+        )
+        agent.facing_radians = direction
+        return False
+
+    def _patrol_target(self, agent: AgentState) -> Vector2:
+        base_angle = (self.world.tick % 360) * (pi / 180.0)
+        radius = 2.0
+        return (
+            agent.position[0] + cos(base_angle) * radius,
+            agent.position[1] + sin(base_angle) * radius,
+        )
+
+    def _is_visible(self, agent: AgentState, target_position: Vector2) -> bool:
+        if self._distance(agent.position, target_position) > agent.vision_range:
+            return False
+        direction = atan2(target_position[1] - agent.position[1], target_position[0] - agent.position[0])
+        rel = self._normalize_angle(direction - agent.facing_radians)
+        return abs(rel) <= agent.fov_radians / 2.0
+
+    def _record_event(
+        self,
+        event_type: str,
+        source_agent_id: Optional[str],
+        target_id: Optional[str],
+        position: Vector2,
+        content: str,
+    ) -> None:
+        event = SimulationEvent(
+            id=self._next_event_id(),
+            tick=self.world.tick,
+            time=self.world.time,
+            event_type=event_type,
+            source_agent_id=source_agent_id,
+            target_id=target_id,
+            position=(position[0], position[1]),
+            content=content,
+        )
+        self.world.recent_events.append(event)
+        if len(self.world.recent_events) > 300:
+            self.world.recent_events = self.world.recent_events[-300:]
+
+    def _serialize_agent(self, agent: AgentState) -> Dict[str, Any]:
         return {
             "id": agent.id,
             "name": agent.name,
-            "position": list(agent.position),
-            "facing_radians": agent.facing_radians,
-            "physical_state": {
-                "energy": agent.physical_state.energy,
-                "stamina": agent.physical_state.stamina,
-                "hunger": agent.physical_state.hunger,
-                "stress_load": agent.physical_state.stress_load,
+            "position": [round(agent.position[0], 2), round(agent.position[1], 2)],
+            "facing_radians": round(agent.facing_radians, 3),
+            "emotion": vars(agent.emotional_state),
+            "physical": vars(agent.physical_state),
+            "current_goal": vars(agent.current_goal),
+            "current_plan": {
+                "steps": agent.current_plan.steps,
+                "cursor": agent.current_plan.cursor,
             },
-            "emotional_state": {
-                key: {"intensity": dim.intensity, "decay_per_tick": dim.decay_per_tick}
-                for key, dim in agent.emotional_state.dimensions.items()
-            },
-            "goals": [
-                {"name": g.name, "score": g.score, "urgency": g.urgency, "reason": g.reason}
-                for g in agent.goals
-            ],
-            "current_goal": (
-                {
-                    "name": agent.current_goal.name,
-                    "score": agent.current_goal.score,
-                    "urgency": agent.current_goal.urgency,
-                    "reason": agent.current_goal.reason,
-                }
-                if agent.current_goal
-                else None
-            ),
-            "current_plan": agent.current_plan,
-            "current_action": {
-                "kind": agent.current_action.kind,
-                "status": agent.current_action.status,
-                "target_id": agent.current_action.target_id,
-                "target_position": list(agent.current_action.target_position) if agent.current_action.target_position else None,
-                "elapsed": agent.current_action.elapsed,
-                "duration": agent.current_action.duration,
-            },
-            "action_history": agent.action_history[-20:],
+            "current_action": vars(agent.current_action),
+            "last_response": agent.last_response,
+            "last_interpretation": agent.last_interpretation,
+            "last_perception": self._serialize_perception(agent.last_perception),
             "memory": [
                 {
-                    "timestamp": m.timestamp,
+                    "id": m.id,
                     "tick": m.tick,
+                    "time": round(m.time, 2),
                     "category": m.category,
                     "content": m.content,
                     "confidence": m.confidence,
                     "related_ids": m.related_ids,
                 }
-                for m in agent.memory[-30:]
+                for m in agent.memory[-20:]
             ],
-            "relationships": {
-                rid: {
-                    "trust": rel.trust,
-                    "familiarity": rel.familiarity,
-                    "affinity": rel.affinity,
-                }
-                for rid, rel in agent.relationships.items()
-            },
-            "last_response": agent.last_response,
         }
+
+    def _serialize_perception(self, perception: Optional[PerceptionResult]) -> Dict[str, Any]:
+        if perception is None:
+            return {
+                "visible_objects": [],
+                "visible_agents": [],
+                "nearby_agents": [],
+                "recent_events": [],
+                "user_messages": [],
+                "remembered": [],
+            }
+        return {
+            "visible_objects": perception.visible_objects,
+            "visible_agents": perception.visible_agents,
+            "nearby_agents": perception.nearby_agents,
+            "recent_events": perception.recent_events,
+            "user_messages": perception.user_messages,
+            "remembered": perception.remembered,
+        }
+
+    def _serialize_event(self, event: SimulationEvent) -> Dict[str, Any]:
+        return {
+            "id": event.id,
+            "tick": event.tick,
+            "time": round(event.time, 2),
+            "event_type": event.event_type,
+            "source_agent_id": event.source_agent_id,
+            "target_id": event.target_id,
+            "position": [round(event.position[0], 2), round(event.position[1], 2)],
+            "content": event.content,
+        }
+
+    @staticmethod
+    def _distance(a: Vector2, b: Vector2) -> float:
+        return sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
+
+    @staticmethod
+    def _normalize_angle(value: float) -> float:
+        while value > pi:
+            value -= 2 * pi
+        while value < -pi:
+            value += 2 * pi
+        return value
+
+    @staticmethod
+    def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
+        return max(low, min(high, value))
+
+    def _next_event_id(self) -> str:
+        self._event_counter += 1
+        return f"evt-{self._event_counter}"
+
+    def _next_memory_id(self) -> str:
+        self._memory_counter += 1
+        return f"mem-{self._memory_counter}"
