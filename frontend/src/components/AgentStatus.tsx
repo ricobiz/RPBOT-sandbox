@@ -17,6 +17,7 @@ const normalize01 = (value: number) => {
 const StatMeter: React.FC<{ label: string; value: number }> = ({ label, value }) => {
   const normalized = normalize01(value)
   const pct = Math.round(normalized * 100)
+
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between text-xs text-slate-600">
