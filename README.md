@@ -145,8 +145,13 @@ The repo is set up to expand into:
 
 ```bash
 cd backend
-pip install -r requirements.txt
+python -m venv .venv
+source .venv/bin/activate  # Windows (PowerShell): .venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m uvicorn main:app --reload
 ```
+
+Troubleshooting: `/bin/bash: uvicorn: command not found` means `uvicorn` is not installed in the currently active Python environment, or your shell is not seeing that environment’s `bin` directory.
 
 Quick simulation sanity check:
 
