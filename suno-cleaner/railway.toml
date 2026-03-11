@@ -1,0 +1,22 @@
+[build]
+builder = "DOCKERFILE"
+buildCommand = "docker build -t suno-cleaner ."
+deployCommand = "docker run -p $PORT:8000 suno-cleaner"
+
+[deploy]
+numReplicas = 1
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+[docker]
+image = "suno-cleaner"
+context = "."
+dockerfile = "Dockerfile"
+
+[settings]
+healthcheckPath = "/health"
+healthcheckPort = 8000
+
+[environment]
+PORT = "8000"
+PYTHONUNBUFFERED = "1"
