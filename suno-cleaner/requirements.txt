@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+demucs
+basic-pitch
+matchering
+soundfile
+numpy
+scipy
+python-multipart
